@@ -57,6 +57,17 @@ describe("Antigravity native CLI adapter", () => {
     expect(result.usage).toEqual({ inputTokens: 12, outputTokens: 8, cachedInputTokens: 4 });
     expect(result.usageBasis).toBe("session_cumulative");
   });
+  it("uses current optional context instead of configured wake and approval identity", async () => {
+    const file = await fixture(`process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({event:'result',result:{...${JSON.stringify(success)},response:JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key])=>key.startsWith('PAPERCLIP_'))))}})));`);
+    const ctx = context(file, { env: { PAPERCLIP_TASK_ID: "stale-task", PAPERCLIP_WAKE_REASON: "stale-wake", PAPERCLIP_WAKE_COMMENT_ID: "stale-comment", PAPERCLIP_APPROVAL_ID: "stale-approval", PAPERCLIP_APPROVAL_STATUS: "approved", PAPERCLIP_LINKED_ISSUE_IDS: "stale-link", PAPERCLIP_SCRATCH_DIR: dir } });
+    let env = JSON.parse((await execute(ctx)).summary!);
+    expect(env.PAPERCLIP_TASK_ID).toBe("task");
+    expect(env.PAPERCLIP_SCRATCH_DIR).toBe(dir);
+    for (const key of ["PAPERCLIP_WAKE_REASON", "PAPERCLIP_WAKE_COMMENT_ID", "PAPERCLIP_APPROVAL_ID", "PAPERCLIP_APPROVAL_STATUS", "PAPERCLIP_LINKED_ISSUE_IDS"]) expect(env).not.toHaveProperty(key);
+    Object.assign(ctx.context, { wakeReason: "issue_commented", wakeCommentId: "current-comment", approvalId: "current-approval", approvalStatus: "pending", issueIds: ["linked-a", "linked-b"] });
+    env = JSON.parse((await execute(ctx)).summary!);
+    expect(env).toMatchObject({ PAPERCLIP_WAKE_REASON: "issue_commented", PAPERCLIP_WAKE_COMMENT_ID: "current-comment", PAPERCLIP_APPROVAL_ID: "current-approval", PAPERCLIP_APPROVAL_STATUS: "pending", PAPERCLIP_LINKED_ISSUE_IDS: "linked-a,linked-b" });
+  });
   it("resumes only the native conversation from the same workspace and account home", async () => {
     const file = await fixture(`process.stdin.resume();process.stdin.on('end',()=>console.log(JSON.stringify({event:'result',result:{...${JSON.stringify(success)},response:JSON.stringify(process.argv.slice(2))}})));`);
     const ctx = context(file);

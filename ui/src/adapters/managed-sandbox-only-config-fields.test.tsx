@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ClaudeLocalConfigFields, ClaudeLocalAdvancedFields } from "./claude-local/config-fields";
 import { CodexLocalConfigFields } from "./codex-local/config-fields";
 import { GeminiLocalConfigFields } from "./gemini-local/config-fields";
+import { AntigravityLocalConfigFields } from "./antigravity-local/config-fields";
 import type { AdapterConfigFieldsProps } from "./types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -179,4 +180,20 @@ describe("adapter config fields under the managed-sandbox-only policy", () => {
     expect(choosePathButtons(result.container)).toHaveLength(0);
     expect(labels).toContain("ACP session mode");
   });
+  it("keeps Antigravity permissions while hiding host paths and engine under the policy", () => {
+    const visible = renderFields(AntigravityLocalConfigFields, { adapterType: "antigravity_local" });
+    roots.push(visible.root);
+    expect(fieldLabels(visible.container)).toContain("Execution engine");
+    expect(fieldLabels(visible.container)).toContain("Agent instructions file");
+    expect(visible.container.textContent).toContain("Antigravity CLI");
+    const hidden = renderFields(AntigravityLocalConfigFields, {
+      adapterType: "antigravity_local", managedSandboxOnly: true,
+    });
+    roots.push(hidden.root);
+    expect(fieldLabels(hidden.container)).not.toContain("Execution engine");
+    expect(fieldLabels(hidden.container)).not.toContain("Agent instructions file");
+    expect(hidden.container.textContent).toContain("Auto-approve all tools");
+    expect(hidden.container.querySelector('[role="switch"]')?.getAttribute("aria-checked")).toBe("false");
+  });
+
 });

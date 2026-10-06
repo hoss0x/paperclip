@@ -14,7 +14,8 @@ Configuration:
 - model: exact account-visible slug from agy models; omitted uses the CLI default.
 - cwd: absolute workspace fallback; task/project execution workspace takes precedence.
 - instructionsFilePath: Markdown instructions prepended to the task prompt.
-- promptTemplate and bootstrapPromptTemplate: standard Paperclip templates.
+- New agents use instructions bundles. Existing promptTemplate and
+  bootstrapPromptTemplate fields are read for legacy configurations only.
 - env: environment/secret bindings resolved by Paperclip; never put secrets in prompts.
 - extraArgs: string array; cannot override prompt, output, model, resume or timeout flags.
 - timeoutSec: process timeout (default 900 seconds, 0 disables it).

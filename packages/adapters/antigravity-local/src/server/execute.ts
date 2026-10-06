@@ -30,6 +30,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     PAPERCLIP_RUN_ID: runId,
     PAPERCLIP_WORKSPACE_CWD: cwd,
   };
+  // Optional context fields must not inherit stale configuration values. Keep
+  // server-resolved runtime variables, such as scratch paths, intact.
+  for (const key of ["PAPERCLIP_TASK_ID", "PAPERCLIP_WAKE_REASON", "PAPERCLIP_WAKE_COMMENT_ID", "PAPERCLIP_APPROVAL_ID", "PAPERCLIP_APPROVAL_STATUS", "PAPERCLIP_LINKED_ISSUE_IDS"]) delete env[key];
   const taskId = asString(context.taskId, asString(context.issueId, "")).trim();
   if (taskId) env.PAPERCLIP_TASK_ID = taskId;
   for (const [key, value] of Object.entries({
@@ -38,6 +41,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     PAPERCLIP_APPROVAL_ID: context.approvalId,
     PAPERCLIP_APPROVAL_STATUS: context.approvalStatus,
   })) if (typeof value === "string" && value) env[key] = value;
+  if (Array.isArray(context.issueIds)) {
+    const linkedIds = context.issueIds.filter((id): id is string => typeof id === "string" && Boolean(id.trim()));
+    if (linkedIds.length) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIds.join(",");
+  }
   if (ctx.authToken) env.PAPERCLIP_API_KEY = ctx.authToken;
   const command = asString(config.command, "agy").trim() || "agy";
   await ensureCommandResolvable(command, cwd, ensurePathInEnv({ ...process.env, ...env }));
