@@ -77,9 +77,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const timeoutSec = asNumber(config.timeoutSec, 900);
   const graceSec = asNumber(config.graceSec, 15);
   let escalation: ReturnType<typeof setTimeout> | undefined;
+  let canceledProcess: ReturnType<typeof runningProcesses.get>;
   const cancel = () => {
     const running = runningProcesses.get(runId);
     if (!running) return;
+    canceledProcess = running;
     signalRunningProcess(running, "SIGTERM");
     escalation ??= setTimeout(() => {
       if (runningProcesses.get(runId) === running) signalRunningProcess(running, "SIGKILL");
@@ -112,5 +114,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   } finally {
     ctx.signal?.removeEventListener("abort", cancel);
     if (escalation) clearTimeout(escalation);
+    // The leader can exit before its descendants. Finish group cleanup before
+    // clearing escalation when cancellation has already settled the run.
+    if (canceledProcess) signalRunningProcess(canceledProcess, "SIGKILL");
   }
 }

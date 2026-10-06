@@ -127,6 +127,30 @@ describe("Antigravity native CLI adapter", () => {
     expect(result.signal).toBeTruthy();
     expect(runningProcesses.has(ctx.runId)).toBe(false);
   });
+  it.skipIf(process.platform !== "linux")("cleans up a canceled descendant after its leader exits", async () => {
+    const child = path.join(dir, "descendant.cjs");
+    await fs.writeFile(child, "process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000);");
+    const file = await fixture(`const {spawn}=require('node:child_process');const child=spawn(process.execPath,[${JSON.stringify(child)}],{stdio:['ignore','ignore','ignore','ipc']});child.on('message',()=>console.log('descendant:'+child.pid));setInterval(()=>{},1000);`);
+    const controller = new AbortController();
+    const ctx = context(file, { timeoutSec: 10, graceSec: 0.05 });
+    ctx.signal = controller.signal;
+    let pid = 0;
+    ctx.onLog = async (_stream, data) => {
+      const match = /descendant:(\d+)/.exec(data);
+      if (match) { pid = Number(match[1]); controller.abort(); }
+    };
+    try {
+      expect((await execute(ctx)).errorCode).toBe("antigravity_canceled");
+      expect(pid).toBeGreaterThan(0);
+      const alive = async () => {
+        try { return !/\) Z /.test(await fs.readFile(`/proc/${pid}/stat`, "utf8")); }
+        catch (err) { if (["ENOENT", "ESRCH"].includes((err as NodeJS.ErrnoException).code ?? "")) return false; throw err; }
+      };
+      for (let i = 0; i < 100 && await alive(); i++) await new Promise(resolve => setTimeout(resolve, 20));
+      expect(await alive()).toBe(false);
+      expect(runningProcesses.has(ctx.runId)).toBe(false);
+    } finally { if (pid) { try { process.kill(pid, "SIGKILL"); } catch {} } }
+  });
   it("does not spawn when already canceled", async () => {
     const file = await fixture("throw new Error('must not start');");
     const ctx = context(file);
