@@ -75,8 +75,9 @@ use `PAPERCLIP_ADAPTER_MODELS`. A selected model is passed unchanged to `--model
 The live account must expose a Flash slug before Flash validation can succeed.
 
 Environment secrets use Paperclip's existing binding resolver. The adapter
-passes resolved values to the process and redacts invocation metadata. It does
-not permit user config to override reserved `PAPERCLIP_*` identity variables.
+passes resolved values to the process and redacts invocation metadata. It preserves
+server-injected runtime variables and sets the authoritative run, agent, task,
+and authentication fields during dispatch.
 Instructions files and selected skill paths enter the prompt; skills stay in
 the managed source directories. No internal files are copied into the project.
 

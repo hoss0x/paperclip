@@ -35,21 +35,21 @@ describe("Antigravity native CLI adapter", () => {
     expect(buildArgs({}, null)).not.toContain("--dangerously-skip-permissions");
     expect(buildArgs({ dangerouslySkipPermissions: true }, null)).toContain("--dangerously-skip-permissions");
   });
-  it.each([{ engine: "acp" }, { timeoutSec: -1 }, { timeoutSec: NaN }, { model: 1 }, { extraArgs: ["--model=another"] }, { extraArgs: ["-p", "secret"] }, { extraArgs: ["--continue"] }, { extraArgs: ["--effort"] }, { env: { PAPERCLIP_API_KEY: "forged" } }])("rejects invalid config and protocol overrides %j", config => {
+  it.each([{ engine: "acp" }, { timeoutSec: -1 }, { timeoutSec: NaN }, { model: 1 }, { extraArgs: ["--model=another"] }, { extraArgs: ["-p", "secret"] }, { extraArgs: ["--continue"] }, { extraArgs: ["--effort"] }, { env: { EXAMPLE_SECRET: 123 } }])("rejects invalid config and protocol overrides %j", config => {
     expect(() => validateConfig(config)).toThrow();
   });
   it("delivers prompt/context over stdin, env secrets, workspace and model, and redacts invocation env", async () => {
     const file = await fixture(`let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => {
       const prompt = JSON.parse(input).message.content;
-      console.log(JSON.stringify({event:'result',result:{...${JSON.stringify(success)}, response:JSON.stringify({prompt,cwd:process.cwd(),model:process.argv[process.argv.indexOf('--model')+1],secret:process.env.EXAMPLE_SECRET,token:process.env.PAPERCLIP_API_KEY,task:process.env.PAPERCLIP_TASK_ID})}}));
+      console.log(JSON.stringify({event:'result',result:{...${JSON.stringify(success)}, response:JSON.stringify({prompt,cwd:process.cwd(),model:process.argv[process.argv.indexOf('--model')+1],secret:process.env.EXAMPLE_SECRET,token:process.env.PAPERCLIP_API_KEY,task:process.env.PAPERCLIP_TASK_ID,run:process.env.PAPERCLIP_RUN_ID,scratch:process.env.PAPERCLIP_SCRATCH_DIR})}}));
     });`);
-    const ctx = context(file, { cwd: "/wrong/fallback", model: "account-flash-slug", env: { EXAMPLE_SECRET: "hidden-value" } });
+    const ctx = context(file, { cwd: "/wrong/fallback", model: "account-flash-slug", env: { EXAMPLE_SECRET: "hidden-value", PAPERCLIP_API_KEY: "forged", PAPERCLIP_RUN_ID: "forged", PAPERCLIP_SCRATCH_DIR: dir } });
     ctx.context.paperclipWorkspace = { cwd: dir, source: "project_workspace" };
     const metas: unknown[] = [];
     ctx.onMeta = async meta => { metas.push(meta); };
     const result = await execute(ctx);
     const response = JSON.parse(result.summary!);
-    expect(response).toMatchObject({ cwd: dir, model: "account-flash-slug", secret: "hidden-value", token: "test-run-token", task: "task" });
+    expect(response).toMatchObject({ cwd: dir, model: "account-flash-slug", secret: "hidden-value", token: "test-run-token", task: "task", run: ctx.runId, scratch: dir });
     expect(response.prompt).toContain("Run this task");
     expect(response.prompt).not.toContain("hidden-value");
     expect(JSON.stringify(metas)).not.toContain("hidden-value");

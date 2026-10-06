@@ -19,7 +19,6 @@ export function validateConfig(config: Record<string, unknown>): void {
   if (config.dangerouslySkipPermissions != null && typeof config.dangerouslySkipPermissions !== "boolean") throw new Error("dangerouslySkipPermissions must be boolean");
   if (config.env != null && (typeof config.env !== "object" || Array.isArray(config.env))) throw new Error("env must be an object");
   for (const [key, value] of Object.entries(parseObject(config.env))) {
-    if (key.startsWith("PAPERCLIP_")) throw new Error("PAPERCLIP_* environment variables are reserved");
     if (typeof value !== "string") throw new Error(`env.${key} must be a resolved string`);
   }
   if (config.extraArgs != null && (!Array.isArray(config.extraArgs) || config.extraArgs.some((arg: unknown) => typeof arg !== "string"))) throw new Error("extraArgs must be a string array");
