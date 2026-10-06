@@ -42,6 +42,7 @@ export const LEGACY_SESSIONED_ADAPTER_TYPES = new Set([
   "cursor_cloud",
   "cursor",
   "gemini_local",
+  "antigravity_local",
   "grok_local",
   "hermes_local",
   "kimi_local",
@@ -66,6 +67,11 @@ export const ADAPTER_SESSION_MANAGEMENT: Record<string, AdapterSessionManagement
     defaultSessionCompaction: DEFAULT_SESSION_COMPACTION_POLICY,
   },
   cursor: {
+    supportsSessionResume: true,
+    nativeContextManagement: "unknown",
+    defaultSessionCompaction: DEFAULT_SESSION_COMPACTION_POLICY,
+  },
+  antigravity_local: {
     supportsSessionResume: true,
     nativeContextManagement: "unknown",
     defaultSessionCompaction: DEFAULT_SESSION_COMPACTION_POLICY,

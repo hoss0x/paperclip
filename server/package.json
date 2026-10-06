@@ -98,7 +98,8 @@
     "ssh2": "^1.17.0",
     "svix": "1.76.1",
     "ws": "^8.21.3",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@paperclipai/adapter-antigravity-local": "workspace:*"
   },
   "bundleDependencies": [
     "@chat-adapter/discord",

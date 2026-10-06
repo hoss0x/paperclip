@@ -1,3 +1,4 @@
+import { printAntigravityStreamEvent } from "@paperclipai/adapter-antigravity-local/cli";
 import type { CLIAdapterModule } from "@paperclipai/adapter-utils";
 import { printClaudeStreamEvent } from "@paperclipai/adapter-claude-local/cli";
 import { printCodexStreamEvent } from "@paperclipai/adapter-codex-local/cli";
@@ -83,6 +84,7 @@ const adaptersByType = new Map<string, CLIAdapterModule>(
     cursorLocalCLIAdapter,
     cursorCloudCLIAdapter,
     geminiLocalCLIAdapter,
+    { type: "antigravity_local", formatStdoutEvent: printAntigravityStreamEvent },
     grokLocalCLIAdapter,
     kimiLocalCLIAdapter,
     hermesGatewayCLIAdapter,
