@@ -1823,3 +1823,8 @@ Chromium. The test starts its own loopback Vite server and mocks API responses;
 it needs no running Paperclip instance or provider credentials. The same spec lives
 in the default `test:e2e` discovery tree, so the existing Chrome CI shards run it
 on pull requests.
+
+## Antigravity CLI
+
+The fork includes a host-local `antigravity_local` adapter for Google's native
+`agy` executable. See [Antigravity CLI setup and verification](adapters/antigravity-cli.md).

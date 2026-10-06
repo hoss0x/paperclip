@@ -1,3 +1,4 @@
+import { antigravityLocalUIAdapter } from "./antigravity-local";
 import type { UIAdapterModule } from "./types";
 import { claudeLocalUIAdapter } from "./claude-local";
 import { codexLocalUIAdapter } from "./codex-local";
@@ -59,6 +60,7 @@ function registerBuiltInUIAdapters() {
     paperclipRunnerUIAdapter,
     cursorCloudUIAdapter,
     geminiLocalUIAdapter,
+    antigravityLocalUIAdapter,
     grokLocalUIAdapter,
     kimiLocalUIAdapter,
     hermesGatewayUIAdapter,

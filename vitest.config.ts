@@ -12,6 +12,7 @@ export default defineConfig({
       "packages/adapters/cursor-cloud",
       "packages/adapters/cursor-local",
       "packages/adapters/gemini-local",
+      "packages/adapters/antigravity-local",
       "packages/adapters/grok-local",
       "packages/adapters/kimi-local",
       "packages/adapters/openclaw-gateway",

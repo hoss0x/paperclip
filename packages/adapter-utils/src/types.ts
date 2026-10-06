@@ -714,6 +714,7 @@ export interface CreateConfigValues {
   command: string;
   args: string;
   extraArgs: string;
+  antigravitySkipPermissions?: boolean;
   envVars: string;
   envBindings: Record<string, unknown>;
   url: string;

@@ -1,3 +1,5 @@
+import { execute as antigravityExecute, sessionCodec as antigravitySessionCodec, testEnvironment as antigravityTestEnvironment, listModels as listAntigravityModels, getConfigSchema as antigravityConfigSchema } from "@paperclipai/adapter-antigravity-local/server";
+import { agentConfigurationDoc as antigravityDoc } from "@paperclipai/adapter-antigravity-local";
 import type { AdapterRuntimeCommandSpec, ServerAdapterModule } from "./types.js";
 import { parseAdapterModelsEnv } from "../services/adapter-models-env.js";
 import { stampClaudeAgentIdHeader } from "./claude-agent-id-header.js";
@@ -861,6 +863,15 @@ const piLocalAdapter: ServerAdapterModule = {
   agentConfigurationDoc: piAgentConfigurationDoc,
 };
 
+const antigravityLocalAdapter: ServerAdapterModule = {
+  type: "antigravity_local", runtimeToolDelivery: "environment",
+  execute: antigravityExecute, testEnvironment: antigravityTestEnvironment,
+  sessionCodec: antigravitySessionCodec, models: [], listModels: listAntigravityModels,
+  getConfigSchema: antigravityConfigSchema,
+  sessionManagement: getAdapterSessionManagement("antigravity_local") ?? undefined,
+  supportsLocalAgentJwt: true, supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath", agentConfigurationDoc: antigravityDoc,
+};
 const adaptersByType = new Map<string, ServerAdapterModule>();
 
 // For builtin types that are overridden by an external adapter, we keep the
@@ -883,6 +894,7 @@ function registerBuiltInAdapters() {
     cursorCloudAdapter,
     cursorLocalAdapter,
     geminiLocalAdapter,
+    antigravityLocalAdapter,
     grokLocalAdapter,
     kimiLocalAdapter,
     hermesGatewayAdapter,
