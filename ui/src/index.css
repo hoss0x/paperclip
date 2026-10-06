@@ -3408,3 +3408,17 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
 @media (max-height: 420px) {
   .agent-setup-popover { overflow-y: auto; }
 }
+
+/* Organization portraits share geometry across uploaded and generated identities. */
+:root {
+  --org-node-height: 144px;
+  --org-portrait-ring: 3px;
+  --org-connector-width: 1.5px;
+}
+.org-agent-portrait { transition: box-shadow var(--motion-duration-fast) var(--motion-ease-standard); }
+.org-agent-node:hover .org-agent-portrait,
+.org-agent-node:focus-visible .org-agent-portrait {
+  box-shadow: 0 0 0 var(--org-portrait-ring) var(--ring);
+}
+.org-agent-node:hover, .org-agent-node:focus-visible { background: var(--accent); }
+.org-chart-connector { stroke-width: var(--org-connector-width); }

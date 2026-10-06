@@ -829,6 +829,7 @@ export function CommentThread({
         agentId: a.id,
         agentIcon: a.icon,
         agentAppearance: a.appearance,
+        agentAvatarUrl: a.avatarUrl,
       }));
   }, [agentMap, providedMentions]);
 

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { resolveAgentAppearance, type CharacterState } from "@paperclipai/shared";
+import { customAgentAvatarUrl } from "@/lib/agent-avatar-url";
 import { cn } from "@/lib/utils";
 import { characterSlot } from "@/lib/agent-character-slot";
 import { AgentAvatar, avatarSizeClasses, type AgentAvatarProps } from "./AgentAvatar";
@@ -20,7 +21,8 @@ export function AgentCharacter({ agent, appearance, size = 256, state = "idle", 
   const slotId = useRef(Symbol("agent-character"));
   const owner = useSyncExternalStore(characterSlot.subscribe, characterSlot.getSnapshot, () => null);
   const [visible, setVisible] = useState(false), [reduced, setReduced] = useState(true), [failed, setFailed] = useState(false), [ready, setReady] = useState(false);
-  const active = visible && !reduced && !failed && motion === "auto" && state !== "rest";
+  const customAvatar = !!customAgentAvatarUrl(agent);
+  const active = !customAvatar && visible && !reduced && !failed && motion === "auto" && state !== "rest";
   useEffect(() => {
     if (typeof matchMedia !== "function" || typeof IntersectionObserver !== "function") return;
     const media = matchMedia("(prefers-reduced-motion: reduce)");
@@ -28,7 +30,7 @@ export function AgentCharacter({ agent, appearance, size = 256, state = "idle", 
     const observer = new IntersectionObserver(entries => setVisible(entries[0]?.isIntersecting ?? false));
     if (root.current) observer.observe(root.current);
     return () => { observer.disconnect(); media.removeEventListener("change", change); };
-  }, []);
+  }, [customAvatar]);
   useEffect(() => {
     if (active && owner === null) characterSlot.acquire(slotId.current);
     if (!active) characterSlot.release(slotId.current);
@@ -55,6 +57,7 @@ export function AgentCharacter({ agent, appearance, size = 256, state = "idle", 
       player.current?.setAnimation(library.animationId(state));
     });
   }, [identity, muted, state, ready]);
+  if (customAvatar) return <AgentAvatar agent={agent} size={size} name={name} label={label} className={className} />;
   return <span ref={root} role={label ? "img" : undefined} aria-label={label} aria-hidden={label ? undefined : true}
     className={cn("relative inline-block shrink-0", avatarSizeClasses[size], className)}>
     <AgentAvatar agent={agent} appearance={identity} size={size < 256 ? 256 : size} name={name} pose={state} muted={muted} className={cn("size-full", ready && "invisible")} />

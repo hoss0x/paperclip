@@ -1918,3 +1918,19 @@ per-turn snapshot participates in session compatibility, so subsequent turns
 remove stale instructions after edits or access revocation. See
 [Connection instructions](connections/CONNECTION-INSTRUCTIONS.md) for contracts,
 UI conventions, custom adapter integration, and initial memory templates.
+
+### Agent avatar uploads
+
+- `agents.avatar_asset_id` is a nullable reference to `assets`. Existing agents
+  retain their generated appearance when no photo is associated.
+- Board members with company write access can `POST /api/agents/:agentId/avatar`
+  with multipart field `file`, or `DELETE /api/agents/:agentId/avatar`.
+- Uploads use the attachment byte ceiling and decode only supported raster images.
+  The server stores a metadata-free square WebP through the existing storage service.
+- Updates serialize on the agent row. Failed associations remove new objects.
+  Replacement and removal clean up old objects; a failed storage deletion retains
+  its asset row for inspection. Mutations write activity records.
+- Normal agent responses return `avatarAssetId` and an authorized asset content
+  path in `avatarUrl`; fallback responses retain their generated avatar URL.
+- Uploaded and generated avatars share circular geometry across agent identity
+  surfaces and organization chart nodes.

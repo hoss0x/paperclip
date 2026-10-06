@@ -383,7 +383,7 @@ export function agentService(db: Db) {
       return {
         ...base,
         appearance,
-        avatarUrl: agentAvatarUrl(appearance),
+        avatarUrl: row.avatarAssetId ? `/api/assets/${row.avatarAssetId}/content` : agentAvatarUrl(appearance),
         orgChainHealth: getAgentWorkEligibility({
           agent: toEligibilityAgent(row),
           agents: eligibilityAgents,

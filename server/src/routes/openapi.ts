@@ -1342,6 +1342,8 @@ const browserUseOperations = [
 ] as const;
 
 const BOARD_ONLY_OPERATIONS = new Set([
+  "POST /api/agents/{agentId}/avatar",
+  "DELETE /api/agents/{agentId}/avatar",
   ...browserUseOperations.map(([method, path]) => `${method.toUpperCase()} ${path}`),
   "GET /api/companies/{companyId}/ai-connections",
   "POST /api/companies/{companyId}/ai-connections",
@@ -1587,6 +1589,7 @@ const INSTANCE_ADMIN_OPERATIONS = new Set([
 ]);
 
 const CREATED_OPERATIONS = new Set([
+  "POST /api/agents/{agentId}/avatar",
   "POST /api/adapters/install",
   "POST /api/chat-endpoints/{endpointId}/setup-secret",
   "POST /api/companies/{companyId}/agent-hires",
@@ -7633,6 +7636,23 @@ registry.registerPath({
   summary: "Delete an attachment",
   request: { params: z.object({ attachmentId: z.string() }) },
   responses: { 200: r.ok(), 401: r.unauthorized },
+});
+
+// Agent profile photos reuse the authorized asset content route.
+registry.registerPath({
+  method: "post", path: "/api/agents/{agentId}/avatar", tags: ["agents"],
+  summary: "Upload or replace an agent profile photo",
+  description: "Requires board company write access. Decodes PNG, JPEG, WebP, GIF or AVIF and stores a square WebP. Uses the configured attachment byte limit.",
+  request: { params: z.object({ agentId: z.string().uuid() }), body: { content: {
+    "multipart/form-data": { schema: { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" } } } },
+  } } },
+  responses: { 201: r.ok(), 400: r.badRequest, 401: r.unauthorized, 403: r.forbidden, 404: r.notFound, 422: r.unprocessable },
+});
+registry.registerPath({
+  method: "delete", path: "/api/agents/{agentId}/avatar", tags: ["agents"],
+  summary: "Remove an agent profile photo and restore the generated avatar",
+  request: { params: z.object({ agentId: z.string().uuid() }) },
+  responses: { 200: r.ok(), 401: r.unauthorized, 403: r.forbidden, 404: r.notFound },
 });
 
 // ─── Assets ──────────────────────────────────────────────────────────────────

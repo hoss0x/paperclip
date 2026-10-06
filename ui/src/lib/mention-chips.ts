@@ -9,7 +9,7 @@ import {
   resolveAgentAppearance,
   type AgentAppearance,
 } from "@paperclipai/shared";
-import { agentAvatarUrl } from "@/lib/agent-avatar-url";
+import { agentAvatarUrl, customAgentAvatarUrl } from "@/lib/agent-avatar-url";
 import { hexToRgb, pickTextColorForPillBg } from "./color-contrast";
 
 export type ParsedMentionChip =
@@ -18,6 +18,7 @@ export type ParsedMentionChip =
       agentId: string;
       icon: string | null;
       appearance?: AgentAppearance | null;
+      avatarUrl?: string | null;
     }
   | {
       kind: "issue";
@@ -112,7 +113,7 @@ export function mentionChipInlineStyle(mention: ParsedMentionChip): CSSPropertie
 
   if (mention.kind === "agent") {
     const appearance = resolveAgentAppearance(mention.appearance, mention.agentId);
-    style["--paperclip-mention-avatar-image"] = `url("${agentAvatarUrl(appearance, 16, 2)}")`;
+    style["--paperclip-mention-avatar-image"] = `url("${customAgentAvatarUrl(mention) ?? agentAvatarUrl(appearance, 16, 2)}")`;
   }
 
   return Object.keys(style).length > 0 ? (style as CSSProperties) : undefined;

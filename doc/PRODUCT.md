@@ -232,3 +232,19 @@ to Tasks. A Views menu on the task list covers the inbox views (Mine, Unread,
 Blocked, Recent, Everything) and the task-status views (All, Active, Backlog,
 Done). Bare `/issues` opens the last-used view, defaulting to Mine; links that
 carry a task filter open All. Old `/inbox` links redirect to the matching view.
+
+### Agent profile photos
+
+Board users can upload, preview, replace, or remove an agent profile photo in
+agent settings. PNG, JPEG, WebP, GIF, and AVIF uploads use the existing
+attachment byte limit. The server decodes the first frame, applies orientation,
+crops a 512-pixel square, removes metadata, and stores WebP through the normal
+company-scoped storage provider. Agent records hold an asset reference, not an
+image blob or external URL. Asset reads require ordinary company access.
+Replacing or removing a photo deletes the previous stored object and asset;
+failed backend deletions retain the asset record and log a warning.
+
+The shared avatar component displays these photos in agent identities and
+profile headers. Generated avatars, then initials, remain the fallback. The
+organization chart uses circular portraits with names and secondary role titles,
+with the existing hierarchy, pan, zoom, and navigation behavior.

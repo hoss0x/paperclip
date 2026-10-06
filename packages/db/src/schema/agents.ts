@@ -11,6 +11,7 @@ import {
   unique,
 } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
+import { assets } from "./assets.js";
 import { environments } from "./environments.js";
 
 export const agents = pgTable(
@@ -22,6 +23,7 @@ export const agents = pgTable(
     role: text("role").notNull().default("general"),
     title: text("title"),
     icon: text("icon"),
+    avatarAssetId: uuid("avatar_asset_id").references((): AnyPgColumn => assets.id, { onDelete: "set null" }),
     appearance: jsonb("appearance").$type<AgentAppearance>(),
     status: text("status").notNull().default("idle"),
     reportsTo: uuid("reports_to").references((): AnyPgColumn => agents.id),

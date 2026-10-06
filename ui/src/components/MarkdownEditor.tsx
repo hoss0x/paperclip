@@ -68,6 +68,7 @@ export interface MentionOption {
   kind?: "agent" | "project" | "user" | "issue";
   agentId?: string;
   agentIcon?: string | null;
+  agentAvatarUrl?: string | null;
   agentAppearance?: import("@paperclipai/shared").AgentAppearance | null;
   projectId?: string;
   projectColor?: string | null;
@@ -1034,6 +1035,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
       applyMentionChipDecoration(link, {
         ...parsed,
         appearance: option?.agentAppearance,
+        avatarUrl: option?.agentAvatarUrl,
       });
     }
   }, [mentionOptionByKey]);
@@ -1601,7 +1603,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorRef, MarkdownEditorProps>
                 ) : option.kind === "user" ? (
                   <User className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 ) : (
-                  <AgentAvatar agent={{ id: option.agentId ?? option.id, name: option.name, appearance: option.agentAppearance }} size={16} />
+                  <AgentAvatar agent={{ id: option.agentId ?? option.id, name: option.name, appearance: option.agentAppearance, avatarUrl: option.agentAvatarUrl }} size={16} />
                 )}
                 {option.kind === "issue" && option.issueIdentifier ? (
                   <span className="flex min-w-0 items-baseline gap-1.5">

@@ -109,6 +109,12 @@ function agentPath(id: string, companyId?: string, suffix = "") {
 }
 
 export const agentsApi = {
+  uploadAvatar: (id: string, file: File) => {
+    const body = new FormData();
+    body.append("file", file);
+    return api.postForm<{ avatarAssetId: string; avatarUrl: string }>(`/agents/${id}/avatar`, body);
+  },
+  removeAvatar: (id: string) => api.delete(`/agents/${id}/avatar`),
   adoptAiConnection: (agentId: string, interactionId: string, connectionId: string, companyId: string) =>
     api.post<ConnectionIntentInteraction>(withCompanyScope(`/agents/${agentId}/connection-intents/${interactionId}/adopt`, companyId), { connectionId }),
 

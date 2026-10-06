@@ -777,6 +777,7 @@ function IssueAttributionByline({
         kind: "agent",
         id: issue.assigneeAgentId,
         appearance: agentMap.get(issue.assigneeAgentId)?.appearance,
+        avatarUrl: agentMap.get(issue.assigneeAgentId)?.avatarUrl,
         name:
           agentMap.get(issue.assigneeAgentId)?.name ??
           issue.assigneeAgentId.slice(0, 8),
@@ -799,6 +800,7 @@ function IssueAttributionByline({
           kind: "agent",
           id: originatingActor.id,
           appearance: agentMap.get(originatingActor.id)?.appearance,
+          avatarUrl: agentMap.get(originatingActor.id)?.avatarUrl,
           name:
             agentMap.get(originatingActor.id)?.name ??
             originatingActor.id.slice(0, 8),

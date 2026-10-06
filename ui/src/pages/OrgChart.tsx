@@ -7,7 +7,6 @@ import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { agentUrl } from "../lib/utils";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -18,7 +17,6 @@ import { useHiddenSettings } from "@/hooks/useHiddenSettings";
 
 // Layout constants
 const CARD_W = 200;
-const CARD_H = 100;
 const GAP_X = 32;
 const GAP_Y = 80;
 const PADDING = 60;
@@ -65,7 +63,7 @@ function subtreeWidth(node: OrgNode): number {
 }
 
 /** Recursively assign x,y positions. */
-function layoutTree(node: OrgNode, x: number, y: number): LayoutNode {
+function layoutTree(node: OrgNode, x: number, y: number, nodeHeight: number): LayoutNode {
   const totalW = subtreeWidth(node);
   const layoutChildren: LayoutNode[] = [];
 
@@ -76,7 +74,7 @@ function layoutTree(node: OrgNode, x: number, y: number): LayoutNode {
 
     for (const child of node.reports) {
       const cw = subtreeWidth(child);
-      layoutChildren.push(layoutTree(child, cx, y + CARD_H + GAP_Y));
+      layoutChildren.push(layoutTree(child, cx, y + nodeHeight + GAP_Y, nodeHeight));
       cx += cw + GAP_X;
     }
   }
@@ -93,7 +91,7 @@ function layoutTree(node: OrgNode, x: number, y: number): LayoutNode {
 }
 
 /** Layout all root nodes side by side. */
-function layoutForest(roots: OrgNode[]): LayoutNode[] {
+function layoutForest(roots: OrgNode[], nodeHeight: number): LayoutNode[] {
   if (roots.length === 0) return [];
 
   const totalW = roots.reduce((sum, r) => sum + subtreeWidth(r), 0);
@@ -104,7 +102,7 @@ function layoutForest(roots: OrgNode[]): LayoutNode[] {
   const result: LayoutNode[] = [];
   for (const root of roots) {
     const w = subtreeWidth(root);
-    result.push(layoutTree(root, x, y));
+    result.push(layoutTree(root, x, y, nodeHeight));
     x += w + GAP_X;
   }
 
@@ -182,7 +180,6 @@ function touchCenter(a: React.Touch, b: React.Touch, container: HTMLDivElement):
 
 // ── Status dot colors (raw hex for SVG) ─────────────────────────────────
 
-import { getAdapterLabel } from "../adapters/adapter-display-registry";
 
 const statusDotColor: Record<string, string> = {
   running: "var(--hex-22d3ee)",
@@ -241,8 +238,11 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
     if (!embedded) setBreadcrumbs([{ label: "Org Chart" }]);
   }, [embedded, setBreadcrumbs]);
 
+  // Read the portrait layout height from the token layer for SVG coordinate math.
+  const nodeHeight = useMemo(() => typeof document === "undefined" ? 0
+    : Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--org-node-height")) || 0, []);
   // Layout computation
-  const layout = useMemo(() => layoutForest(orgTree ?? []), [orgTree]);
+  const layout = useMemo(() => layoutForest(orgTree ?? [], nodeHeight), [orgTree, nodeHeight]);
   const allNodes = useMemo(() => flattenLayout(layout), [layout]);
   const edges = useMemo(() => collectEdges(layout), [layout]);
 
@@ -252,10 +252,10 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
     let maxX = 0, maxY = 0;
     for (const n of allNodes) {
       maxX = Math.max(maxX, n.x + CARD_W);
-      maxY = Math.max(maxY, n.y + CARD_H);
+      maxY = Math.max(maxY, n.y + nodeHeight);
     }
     return { width: maxX + PADDING, height: maxY + PADDING };
-  }, [allNodes]);
+  }, [allNodes, nodeHeight]);
 
   // Pan & zoom state
   const containerRef = useRef<HTMLDivElement>(null);
@@ -576,7 +576,7 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
             {edges.map(({ parent, child }) => {
               const x1 = parent.x + CARD_W / 2;
-              const y1 = parent.y + CARD_H;
+              const y1 = parent.y + nodeHeight;
               const x2 = child.x + CARD_W / 2;
               const y2 = child.y;
               const midY = (y1 + y2) / 2;
@@ -587,7 +587,7 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
                   d={`M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`}
                   fill="none"
                   stroke="var(--border)"
-                  strokeWidth={1.5}
+                  className="org-chart-connector"
                 />
               );
             })}
@@ -608,15 +608,17 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
             const dotColor = statusDotColor[node.status] ?? defaultDotColor;
 
             return (
-              <Card
+              <button
+                type="button"
+                aria-label={`${node.name}, ${agent?.title ?? roleLabel(node.role)}`}
                 key={node.id}
                 data-org-card
-                className="block absolute py-0 hover:shadow-md hover:border-foreground/20 transition-(--tp-box-shadow-border-color) duration-150 cursor-pointer select-none"
+                className="org-agent-node group absolute flex flex-col items-center gap-2 rounded-lg p-2 text-center cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 style={{
                   left: node.x,
                   top: node.y,
                   width: CARD_W,
-                  minHeight: CARD_H,
+                  minHeight: "var(--org-node-height)",
                 }}
                 onClick={() => navigate(agent ? agentUrl(agent) : `/agents/${node.id}`)}
                 onClickCapture={(e) => {
@@ -626,38 +628,16 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
                   e.stopPropagation();
                 }}
               >
-                <div className="flex items-center px-4 py-3 gap-3">
-                  {/* Agent icon + status dot */}
-                  <div className="relative shrink-0">
-                    <div className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
-                      <AgentAvatar agent={agent} size={16} className="h-4.5 w-4.5 text-foreground/70"/>
-                    </div>
-                    <span
-                      className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-card"
-                      style={{ backgroundColor: dotColor }}
-                    />
-                  </div>
-                  {/* Name + role + adapter type */}
-                  <div className="flex flex-col items-start min-w-0 flex-1">
-                    <span className="text-sm font-semibold text-foreground leading-tight">
-                      {node.name}
-                    </span>
-                    <span className="text-(length:--text-micro) text-muted-foreground leading-tight mt-0.5">
-                      {agent?.title ?? roleLabel(node.role)}
-                    </span>
-                    {agent && (
-                      <span className="text-(length:--text-nano) text-muted-foreground/60 font-mono leading-tight mt-1">
-                        {getAdapterLabel(agent.adapterType)}
-                      </span>
-                    )}
-                    {agent && agent.capabilities && (
-                      <span className="text-(length:--text-nano) text-muted-foreground/80 leading-tight mt-1 line-clamp-2">
-                        {agent.capabilities}
-                      </span>
-                    )}
-                  </div>
+                <div className="relative shrink-0">
+                  <AgentAvatar agent={agent ?? { id: node.id, name: node.name }} size={64}
+                    className="org-agent-portrait ring-1 ring-border" />
+                  <span title={node.status} aria-label={`Status: ${node.status}`}
+                    className="absolute bottom-0 right-0 size-3 rounded-full border-2 border-background"
+                    style={{ backgroundColor: dotColor }} />
                 </div>
-              </Card>
+                <span className="w-full truncate text-base font-semibold text-foreground">{node.name}</span>
+                <span className="w-full truncate text-xs text-muted-foreground">{agent?.title ?? roleLabel(node.role)}</span>
+              </button>
             );
           })}
         </div>
