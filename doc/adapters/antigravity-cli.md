@@ -106,8 +106,13 @@ in force.
 
 Authentication was completed on the VPS as the Paperclip OS user. On
 2026-10-06, `agy models` returned the account model list, including
-`gemini-3.8-flash-medium`. This returned Flash model is used for the live
-Paperclip qualification. Model IDs can change; always discover the current
+`gemini-3.8-flash-low`. A real Paperclip heartbeat from an isolated source
+instance invoked this returned model, ran `pwd` in the fork checkout, and
+returned `FLASH_RUNTIME_OK` with the absolute repository directory. Paperclip
+recorded status `succeeded`, exit code **0**, the native conversation ID,
+24,322 input tokens, 227 output tokens, and 16,305 cached input tokens.
+Two earlier attempts with Flash Medium recorded a Google eligibility-service
+503. The successful run used Flash Low after the service responded again. Model IDs can change; always discover the current
 account list rather than copying this example into a deployment.
 
 The automated suite uses executable fixtures to test process invocation, stdin,
