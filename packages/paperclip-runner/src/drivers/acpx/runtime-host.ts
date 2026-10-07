@@ -214,6 +214,8 @@ export interface AcpxRuntimeHostDependencies {
 }
 
 export interface OpenAcpxRuntimeHostOptions {
+  /** Operator-owned command preparation, including replacement control roots. */
+  openCommand?: (installation: VerifiedAcpxInstallation) => Promise<VerifiedAcpxCommandLease>;
   /** Explicit task execution policy; never inferred from auto-approval. Required for Pi. */
   providerPolicy?: AcpxProviderRuntimePolicy;
   /** Never persisted as session options or recovery identity. */
@@ -494,7 +496,7 @@ export class AcpxRuntimeHost {
       }
       command = await acquireAbortableAdmissionResource({
         signal: options.signal,
-        acquire: () => installation.openCommand(),
+        acquire: () => options.openCommand?.(installation) ?? installation.openCommand(),
         resource: "command",
         releaseLate: (lateCommand) => lateCommand.close(),
         reportFailure: (failure) =>
@@ -502,7 +504,7 @@ export class AcpxRuntimeHost {
       });
       const commandOwner = createAcpxCommandLeaseOwner(
         command,
-        () => installation.openCommand(),
+        () => options.openCommand?.(installation) ?? installation.openCommand(),
       );
       command = commandOwner.command;
       toolBridge = options.semanticTools

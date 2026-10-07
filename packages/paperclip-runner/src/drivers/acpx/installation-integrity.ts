@@ -6,6 +6,7 @@ import {
   spawn as spawnChildProcess,
   type ChildProcess,
   type SpawnOptionsWithoutStdio,
+  type SpawnOptions,
 } from "node:child_process";
 import { constants, existsSync, realpathSync } from "node:fs";
 import {
@@ -406,8 +407,11 @@ export interface VerifiedAcpxInstallation {
   readonly commandDigest: string;
   readonly agentServerPackageJsonPath: string | null;
   readonly agentRuntimePackageJsonPath: string | null;
-  openCommand(): Promise<VerifiedAcpxCommandLease>;
+  openCommand(options?: { processLauncher?: VerifiedAcpxProcessLauncher }): Promise<VerifiedAcpxCommandLease>;
 }
+
+/** Operator-owned synchronous boundary; verified descriptors are still leased here. */
+export type VerifiedAcpxProcessLauncher = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 
 /**
  * Native candidate distribution primitive. This verifies bytes and lifetime
@@ -425,12 +429,12 @@ export async function verifyNativeAcpxInstallation(
     commandDigest: `sha256:${declaration.expectedClosureSha256}`,
     agentServerPackageJsonPath: declaration.manifestPath,
     agentRuntimePackageJsonPath: null,
-    async openCommand(): Promise<VerifiedAcpxCommandLease> {
+    async openCommand(options?: { processLauncher?: VerifiedAcpxProcessLauncher }): Promise<VerifiedAcpxCommandLease> {
       const native = await createNativeAcpxDistributionSnapshot(declaration, entries);
       const lease = commandLease(
         native.snapshot.roots[0]!, NATIVE_ACPX_BOOTSTRAP_NAME, "commonjs",
         native.bootstrap, native.commandDirectory, [], 0, "commonjs", [],
-        null, null, native.snapshot,
+        null, null, native.snapshot, options?.processLauncher,
       );
       return {
         spawn(args = [], options = {}, lifetime) {
@@ -740,7 +744,7 @@ export async function verifyQualifiedAcpxInstallation(
     commandDigest,
     agentServerPackageJsonPath: serverPackageJsonPath,
     agentRuntimePackageJsonPath: runtimePackageJsonPath,
-    async openCommand(): Promise<VerifiedAcpxCommandLease> {
+    async openCommand(options?: { processLauncher?: VerifiedAcpxProcessLauncher }): Promise<VerifiedAcpxCommandLease> {
       const currentDirectory = await openVerifiedCommandDirectory(
         commandDirectory,
         "provider",
@@ -820,6 +824,7 @@ export async function verifyQualifiedAcpxInstallation(
           currentRuntimeExecutable,
           runtimeExecutable?.environmentVariable ?? null,
           privateSnapshot,
+          options?.processLauncher,
         );
       } catch (error) {
         await Promise.all([
@@ -1366,6 +1371,7 @@ function commandLease(
   providerRuntimeEnvironmentVariable:
     VerifiedAcpxRuntimeExecutable["environmentVariable"] | null,
   privateSnapshot: AcpxPrivateSnapshot | null,
+  processLauncher?: VerifiedAcpxProcessLauncher,
 ): VerifiedAcpxCommandLease {
   let consumed = false;
   let directoriesReleased = false;
@@ -1457,7 +1463,7 @@ function commandLease(
           environment[VERIFIED_PROVIDER_RUNTIME_TARGET_ENV] =
             providerRuntimeEnvironmentVariable;
         }
-        child = spawnChildProcess(
+        child = (processLauncher ?? spawnChildProcess)(
           runtimeHandoff.executable,
           guarded
             ? [

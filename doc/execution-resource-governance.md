@@ -79,6 +79,15 @@ the shared limit failure into each root's local run evidence. Startup recovery
 groups surviving roots by their envelope and counts its budget once. Real tests
 cover concurrent roots with a single global slot, queued cancellation, unused
 prepared roots, shared OOM containment and recovery. ACPX wiring remains pending.
+The verified ACPX installation now accepts an operator-owned synchronous process
+launcher after it constructs its exact arguments, environment and inherited
+descriptors. Native-distribution and qualified-package leases use the same seam;
+all digest, guardian and credential-fence checks remain in the verified launcher.
+The runtime host can prepare both its initial command and replacements through
+one operator callback. A real scope fixture passed guardian ownership, inherited
+credential fences, provider-exit proof and a transient verified command beside
+the persistent sentinel with one global slot. Production session ownership and
+credential-safe envelope teardown still need wiring and qualification.
 Scope mode requires the packaged runner; it never falls back to an unbounded
 launch. Scope OOM evidence comes from cgroup events and the systemd result;
 `OOMPolicy=stop` applies to services only.

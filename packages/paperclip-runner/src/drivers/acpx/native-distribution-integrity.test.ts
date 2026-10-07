@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { chmod, copyFile, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile, type FileHandle } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
@@ -8,6 +8,13 @@ import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitVerifiedAcpxProviderExit, awaitVerifiedAcpxProviderOwnership, verifyNativeAcpxInstallation } from "./installation-integrity.js";
 import { createNativeAcpxDistributionSnapshot, readNativeAcpxDistributionEntries, parseNativeAcpxDistributionEntries, type NativeAcpxDistributionInput, type NativeAcpxDistributionEntry } from "./native-distribution-integrity.js";
+import { withExecutionResourceContext } from "../../../../adapter-utils/src/execution-resource-context.js";
+import { prepareExecutionRunEnvelope } from "../../../../adapter-utils/src/execution-run-envelope.js";
+import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "../../../../adapter-utils/src/execution-resource-policy.js";
+import { prepareResourceScopeProcess } from "../../../../adapter-utils/src/resource-stdio-process.js";
+import { ensureSystemdExecutionSlice } from "../../../../adapter-utils/src/systemd-execution-slice.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
@@ -19,7 +26,7 @@ const hash = (value: string | Buffer) => createHash("sha256").update(value).dige
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 async function fixture(options: { node?: boolean; script?: string } = {}): Promise<NativeAcpxDistributionInput> {
-  const root = await mkdtemp(join(tmpdir(), "native-acpx-test-")); roots.push(root);
+  const root = await mkdtemp(join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "native-acpx-test-")); roots.push(root);
   const entries: NativeAcpxDistributionEntry[] = [];
   if (options.node) {
     await copyFile(process.execPath, join(root, "runtime")); await chmod(join(root, "runtime"), 0o700);
@@ -76,6 +83,57 @@ async function output(child: ChildProcess): Promise<{ text: string; error: strin
 }
 
 describe("native ACPX execution closure", () => {
+  it.skipIf(process.env.PAPERCLIP_TEST_SYSTEMD !== "1")("retains guardian ownership, credential descriptors and provider-exit proof inside a shared run envelope", async () => {
+    const policy = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_CAPACITY_MIB: "256",
+      PAPERCLIP_EXECUTION_MEMORY_MAX_MIB: "128", PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB: "128" }, "linux", 8 * 1024 ** 3);
+    const slice = await ensureSystemdExecutionSlice(policy, `paperclip-acpxcheck-${randomUUID()}.slice`);
+    const admission = new ExecutionResourceAdmission(policy.capacityBytes, 1);
+    const fences = await Promise.all([listen(), listen()]);
+    const fds = fences.map(server => (server as Server & { _handle?: { fd?: number } })._handle!.fd!);
+    const ctl = promisify(execFile);
+    try {
+      await withExecutionResourceContext({ policy, admission, slice, scratchDir: process.env.PAPERCLIP_SCRATCH_DIR! }, async () => {
+        const envelope = await prepareExecutionRunEnvelope();
+        try { await envelope.run(async () => {
+          const declaration = await fixture({ script: '#!/bin/sh\ncat /proc/self/cgroup\nwhile :; do sleep 1; done\n' });
+          const installation = await verifyNativeAcpxInstallation(declaration);
+          const prepared = await prepareResourceScopeProcess({ runId: randomUUID(), cwd: process.cwd(), nativeLoaderCommand: process.env.PAPERCLIP_TEST_RESOURCE_LOADER! });
+          let worker: ReturnType<typeof prepared.spawn> | undefined;
+          const lease = await installation.openCommand({ processLauncher: (command, args, options) => {
+            expect(options.shell).toBe(false);
+            const stdio = options.stdio as Array<"pipe" | number>;
+            worker = prepared.spawn({ command, args: [...args], cwd: process.cwd(), env: options.env ?? {}, detached: options.detached, extraStdio: stdio.slice(3) });
+            return worker.child;
+          } });
+          const owners: number[] = [];
+          const child = lease.spawn([], {}, { credentialFenceFds: [fds[0]!, fds[1]!], activateCredentialFenceOwner: async pid => { owners.push(pid); } });
+          let stdout = ""; let stderr = "";
+          child.stdout!.on("data", value => { stdout += value; }); child.stderr!.on("data", value => { stderr += value; });
+          try {
+            await worker!.ready;
+            await awaitVerifiedAcpxProviderOwnership(child);
+            expect(owners).toEqual([worker!.pid]);
+            await expect.poll(() => stdout, { timeout: 5_000 }).toContain(envelope.slice);
+            expect(stderr).toBe(""); expect(stdout).not.toContain("paperclipai.service");
+            // A second verified command can launch beside the sentinel without
+            // taking another global slot, preserving transient control admission.
+            const controlTicket = await prepareResourceScopeProcess({ runId: randomUUID(), cwd: process.cwd(), nativeLoaderCommand: process.env.PAPERCLIP_TEST_RESOURCE_LOADER! });
+            const control = await (await verifyNativeAcpxInstallation(await fixture())).openCommand({ processLauncher: (command, args, options) =>
+              controlTicket.spawn({ command, args: [...args], cwd: process.cwd(), env: options.env ?? {}, extraStdio: (options.stdio as Array<"pipe" | number>).slice(3), detached: options.detached }).child });
+            try { expect((await output(control.spawn())).code).toBe(0); } finally { await controlTicket.close(); await control.close(); }
+            expect(admission.snapshot.active).toBe(1);
+            child.kill();
+            await awaitVerifiedAcpxProviderExit(child);
+            await worker!.completion;
+          } finally { await prepared.close(); await lease.close(); }
+        }); } finally { await envelope.close(); }
+        expect(admission.snapshot.active).toBe(0);
+      });
+    } finally {
+      await Promise.all(fences.map(server => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))));
+      await ctl("systemctl", ["--user", "stop", slice]); await ctl("systemctl", ["--user", "revert", slice]);
+    }
+  }, 20_000);
   it("rejects paths, ordering, oversized files and altered manifest pins", () => {
     const entry = { path: "runtime", sha256: "a".repeat(64), size: 10, executable: true };
     for (const entries of [[{ ...entry, path: "../escape" }], [{ ...entry, path: "/absolute" }], [entry, entry], [{ ...entry, size: 2 ** 40 }], [{ ...entry, unknown: 1 }]]) {
