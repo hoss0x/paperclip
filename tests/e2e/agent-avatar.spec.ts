@@ -28,7 +28,7 @@ test("profile photos persist, replace and reset across the organization chart", 
     if (target) await page.screenshot({ path: path.join(target, name), fullPage: true });
   };
   try {
-    await page.goto(`${prefix}/agents/${chief.id}/runtime`);
+    await page.goto(`${prefix}/agents/${chief.id}/runtime`, { waitUntil: "domcontentloaded" });
     const control = page.getByRole("region", { name: "Agent profile photo" });
     await expect(control.getByRole("button", { name: "Upload photo" })).toBeVisible();
     await control.getByLabel("Choose profile photo").setInputFiles(photoInput);
@@ -37,14 +37,14 @@ test("profile photos persist, replace and reset across the organization chart", 
     await expect(control.getByRole("button", { name: "Remove photo" })).toBeVisible();
     const first = await json(await request.get(`/api/agents/${chief.id}`));
     expect(first.avatarAssetId).toBeTruthy();
-    await page.reload();
+    await page.reload({ waitUntil: "domcontentloaded" });
     await expect(control.locator("img")).toHaveAttribute("src", first.avatarUrl);
     await evidence("avatar-management.png");
-    await page.goto(`${prefix}/agents/${chief.id}`);
+    await page.goto(`${prefix}/agents/${chief.id}`, { waitUntil: "domcontentloaded" });
     await expect(page.locator(`img[src="${first.avatarUrl}"]`).first()).toBeVisible();
     await evidence("agent-overview.png");
 
-    await page.goto(`${prefix}/agents/all`);
+    await page.goto(`${prefix}/agents/all`, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "Org chart view" }).click();
     const nodes = page.locator("[data-org-card]");
     await expect(nodes).toHaveCount(3);
@@ -70,7 +70,7 @@ test("profile photos persist, replace and reset across the organization chart", 
     await uploaded.press("Enter");
     await expect(page).toHaveURL(new RegExp(`/agents/${chief.urlKey}`));
 
-    await page.goto(`${prefix}/agents/${chief.id}/runtime`);
+    await page.goto(`${prefix}/agents/${chief.id}/runtime`, { waitUntil: "domcontentloaded" });
     await control.getByLabel("Choose profile photo").setInputFiles(photoInput);
     await control.getByRole("button", { name: "Save photo" }).click();
     await expect(control.getByRole("button", { name: "Remove photo" })).toBeVisible();
@@ -80,7 +80,7 @@ test("profile photos persist, replace and reset across the organization chart", 
     await control.getByRole("button", { name: "Remove photo" }).click();
     await expect(control.getByRole("button", { name: "Upload photo" })).toBeVisible();
     expect((await request.get(second.avatarUrl)).status()).toBe(404);
-    await page.reload();
+    await page.reload({ waitUntil: "domcontentloaded" });
     expect((await json(await request.get(`/api/agents/${chief.id}`))).avatarAssetId).toBeNull();
     await expect(control.locator("img")).toHaveAttribute("src", /\/api\/agent-avatars\//);
   } finally {
