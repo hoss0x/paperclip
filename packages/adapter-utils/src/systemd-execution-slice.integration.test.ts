@@ -3,13 +3,48 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { resolveExecutionResourcePolicy } from "./execution-resource-policy.js";
+import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "./execution-resource-policy.js";
+import { listActiveExecutionUnits, reconcileExecutionAdmission } from "./execution-resource-reconciliation.js";
 import { prepareSystemdExecution, type SystemdExecutionBoundary } from "./systemd-execution.js";
 import { ensureSystemdExecutionSlice } from "./systemd-execution-slice.js";
 
 const execFileAsync = promisify(execFile);
 const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTEMD === "1";
 (enabled ? describe : describe.skip)("aggregate execution slice", () => {
+  it("reconstructs admission from a real surviving unit before admitting new work", async () => {
+    const slice = `paperclip-recovery-${randomUUID()}.slice`;
+    const scratchDir = process.env.PAPERCLIP_SCRATCH_DIR;
+    if (!scratchDir) throw new Error("Tests require run-owned scratch");
+    const policy = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_CAPACITY_MIB: "128",
+      PAPERCLIP_EXECUTION_MEMORY_MAX_MIB: "96", PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB: "96" }, "linux", 8 * 1024 ** 3);
+    await ensureSystemdExecutionSlice(policy, slice);
+    const boundary = await prepareSystemdExecution({ runId: randomUUID(), command: process.execPath,
+      args: ["-e", "setInterval(()=>{},1000)"], cwd: process.cwd(), env: { PATH: process.env.PATH }, policy, scratchDir, slice });
+    const child = spawn(boundary.command, boundary.args, { stdio: "ignore" });
+    const closed = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+    const deadline = setTimeout(() => { void boundary.signal("SIGKILL").catch(() => {}); }, 10_000);
+    try {
+      await boundary.identity();
+      expect(await listActiveExecutionUnits(slice)).toEqual([{ unit: boundary.unit, memoryMaxBytes: policy.memoryMaxBytes }]);
+      const admission = new ExecutionResourceAdmission(policy.capacityBytes, 1);
+      await reconcileExecutionAdmission({ admission, list: () => listActiveExecutionUnits(slice), intervalMs: 100 });
+      let admitted = false;
+      const next = admission.acquire(policy.memoryMaxBytes).then(release => { admitted = true; return release; });
+      expect(admission.snapshot).toEqual({ active: 1, usedBytes: policy.memoryMaxBytes, queued: 1 });
+      await new Promise(resolve => setTimeout(resolve, 200));
+      expect(admitted).toBe(false);
+      await boundary.finish(true);
+      await closed;
+      await expect.poll(() => admitted, { timeout: 5_000 }).toBe(true);
+      (await next)();
+      expect(admission.snapshot).toEqual({ active: 0, usedBytes: 0, queued: 0 });
+    } finally {
+      clearTimeout(deadline);
+      await boundary.finish(true);
+      await execFileAsync("systemctl", ["--user", "stop", slice]);
+    }
+  }, 20_000);
+
   it("bounds independent units, rejects a conflicting policy, and permits later recovery", async () => {
     const slice = `paperclip-validation-${randomUUID()}.slice`;
     const scratchDir = process.env.PAPERCLIP_SCRATCH_DIR;

@@ -1,12 +1,11 @@
 # Execution resource governance
 
-Implementation in progress on `feat/runtime-resource-governance`. The shared
-child-process runner now accepts a resource context and is tested
-through real systemd units. That context is **not yet connected to server adapter
-dispatch**. The native session executor has a context-aware launcher hook,
-but its session/resume paths are not yet validated under isolation. These
-settings do not currently isolate ordinary
-agent runs. Do not deploy this intermediate branch as a completed resource fix.
+Implementation in progress on `feat/runtime-resource-governance`. Server
+adapter dispatch now installs the shared operator resource context and persists
+unit ownership before launch. Shared child-runner and native runnerd launcher
+paths are validated through real systemd units. Direct native Codex/OpenCode/ACPX
+transports still have separate spawn paths that need integration and session/resume
+coverage. Do not deploy this intermediate branch as a completed resource fix.
 
 ## Shared boundary
 
@@ -32,8 +31,9 @@ bridge that returns a handle while admission/launch proceeds asynchronously;
 it updates the handle with the worker PID and uses whole-unit signals. Raw
 process output does not gain a new native logging path. Full native protocol,
 reattach and session/resume coverage is still pending.
-Calls outside this context retain their existing direct-spawn behavior until
-dispatch integration is complete.
+Calls outside this context retain their existing direct-spawn behavior. The
+native direct-backend factory currently bypasses the runnerd launcher seam;
+that path remains unfinished.
 
 The boundary sets `MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `CPUQuota`,
 `TasksMax`, `KillMode=control-group` and `OOMPolicy=stop`. An explicitly requested
@@ -69,18 +69,23 @@ measurement. They are not a minimum-VPS recommendation.
 The resolver rejects malformed numbers, contradictory thresholds, and capacity
 that consumes the reserved host memory. Its admission primitive reserves complete
 hard-memory budgets in FIFO order, checks both memory capacity and concurrency,
-and removes cancelled queued requests. Dispatch integration must use one pool
-across all companies/adapters, release only after verified cleanup, and reconcile
-surviving units after controller restart. `withOperatorExecutionResources` now
+and removes cancelled queued requests. Dispatch uses one pool across all companies/adapters in a control-plane process
+and releases capacity after verified cleanup. Initialization counts active units
+in the execution slice before accepting new work. Surviving-unit reservations
+remain until the user manager confirms termination; failed refreshes retain
+capacity. This provides restart accounting for a single controller. Multiple
+independent controllers sharing a user-manager slice do not yet share FIFO slots. `withOperatorExecutionResources` now
 prepares `paperclip-executions.slice` with `MemoryMax` equal to total admission
 capacity. Its aggregate swap cap equals the configured per-execution swap cap
 (default zero). All services launched in that context enter this slice. Limits
 survive controller restarts; runtime slice configuration is recreated after a
 user-manager restart. Existing conflicting capacity is rejected before launch.
 The real aggregate test used separate launch paths without a shared JS queue
-and proved slice OOM containment plus later recovery. Reconciliation of existing
-units into admission and durable run ownership is still required; the OS cap
-bounds memory but does not provide cross-controller FIFO scheduling.
+and proved slice OOM containment plus later recovery. The OS cap bounds memory but does not provide cross-controller FIFO scheduling.
+Legacy cancellation and stale-controller recovery stop recorded run-owned units
+and verify their inactive state before releasing ownership. Adapter output cannot
+create the reserved unit-ownership event types. Native cancellation retains its
+existing audited authority; full detach/reattach qualification is still pending.
 
 The low-memory environment supplies supported defaults for `CARGO_BUILD_JOBS`,
 `CMAKE_BUILD_PARALLEL_LEVEL`, `RAYON_NUM_THREADS`, Go runtime concurrency, and pnpm
@@ -118,8 +123,13 @@ and a successful execution after failure. Set `PAPERCLIP_TEST_SYSTEMD=1` and
 `PAPERCLIP_SCRATCH_DIR` to a run-owned scratch directory to run these tests.
 Run heavy validation inside a bounded sibling unit, never inside the live service.
 
-Remaining before handoff: shared runner/adapter dispatch integration, native
-transport coverage, durable cancellation/restart cleanup, aggregate admission
-integration, resource-failure projection into run logs/results, integrated
+Server dispatch records per-unit limits and terminal evidence in the local run
+log. A memory kill overrides an adapter success or parser failure with
+`execution_resource_limit`; other provider errors retain their original meaning.
+Tests exercise failed ownership persistence, OOM projection/recovery, native
+launcher context propagation, and real surviving-unit admission reconstruction.
+
+Remaining before handoff: direct native transport integration and full session/
+resume/cancellation/restart coverage, integrated
 UI/API/PostgreSQL stress and low-memory measurements, full checks, internal
 review, and the focused PR. No live deployment or resource-PR merge is authorized.

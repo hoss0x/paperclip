@@ -101,6 +101,25 @@ export class ExecutionResourceAdmission {
     return { usedBytes: this.#usedBytes, active: this.#active, queued: this.#pending.length };
   }
 
+  /** Count already-running OS units before accepting new work after restart.
+   * Existing work can exceed a newly reduced slot count; successors then wait.
+   */
+  adopt(bytes: number): () => void {
+    if (!Number.isSafeInteger(bytes) || bytes < 1 || !Number.isSafeInteger(this.#usedBytes + bytes)) {
+      throw new Error("Existing execution unit has an invalid memory budget");
+    }
+    this.#usedBytes += bytes;
+    this.#active++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.#usedBytes -= bytes;
+      this.#active--;
+      this.#drain();
+    };
+  }
+
   acquire(bytes: number, signal?: AbortSignal): Promise<() => void> {
     if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > this.capacityBytes) {
       return Promise.reject(new Error("Execution budget exceeds admission capacity"));
