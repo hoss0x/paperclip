@@ -247,7 +247,7 @@ provide an OS memory boundary.
 
 | Path | Execution location and remaining gap |
 | --- | --- |
-| `adapter-utils/src/ssh.ts` | Buffered SSH commands and Git bundle/fetch/merge helpers now use the shared buffered scope runner when a resource context is present. Paired tar/SSH streams still use direct child processes; transfer pairs must share one reservation so one partner cannot queue behind the other. Preserve backpressure, authentication cleanup, cancellation and restoration ordering. |
+| `adapter-utils/src/ssh.ts` | Buffered SSH commands and Git bundle/fetch/merge helpers now use the shared buffered scope runner when a resource context is present. Paired tar/SSH and file-stream roots now use one run envelope when a resource context is present, so one partner cannot queue behind the other. Backpressure and authentication cleanup remain intact; completion waits for drained output and verified scope cleanup. Preparation/restoration context coverage remains to be qualified. |
 | `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction now uses the shared buffered scope runner when a resource context is present, including durable workspace seeds, with a finite 120-second deadline and whole-tree cleanup. Context coverage outside adapter dispatch remains to be qualified. |
 | `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler now uses a cgroup scope through the shared launcher. UI/API scans install an operator resource context even outside agent dispatch; admission waits count toward the scan deadline. Run-owned scans retain the controller run id for recorded-unit cancellation. Existing scheduler/output/backpressure and Git locking rules remain in place. |
 | `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Shared metadata/bundle helpers now use buffered scopes when a resource context is present. Server workspace Git calls install the operator context, including calls outside dispatch. Shared helpers invoked during other preparation/restoration still need context coverage. Mandatory writer locks and caller Git environment settings remain unchanged. |
@@ -284,6 +284,17 @@ commands now have a two-minute deadline. Server workspace metadata Git commands
 keep Node's former 1 MiB output budget and gain a two-minute deadline. Tests cover
 real Git metadata/tar creation call sites and an SSH executable fixture handoff,
 alongside timeout descendants, output overflow, memory failure and recovery.
+
+Transfer groups reuse an existing session envelope or reserve one global slot for
+all local transfer roots. Each root has a scope within the shared memory/CPU/task
+budget; the two-minute deadline includes admission and completion cleanup.
+Cancellation stops complete scopes, and a memory kill reports
+`execution_resource_limit` before subsequent work is admitted. Streaming stderr
+retains a finite 128 Ki-character diagnostic tail. The SSH remote host still owns
+its remote-side resource policy; a local SSH cgroup does not govern a remote
+machine. Tests cover one-slot paired streams, delayed subscription to immediate
+exit, deadline descendants, failed partners, queued admission, shared OOM and
+recovery, and real tar streams through a local SSH executable fixture.
 
 A bounded compiler diagnostic excluded 258 colocated server test roots without
 changing the repository configuration. It still approached the existing 2.2 GiB
