@@ -12,6 +12,8 @@ export interface ExecutionResourceContext {
   scratchDir: string;
   slice?: string;
   signal?: AbortSignal;
+  /** Operator-owned packaged runner used for descriptor-preserving handoffs. */
+  nativeLoaderCommand?: () => string;
   onUnitPrepared?: (unit: { unit: string; memoryMaxBytes: number }) => Promise<void>;
   onEvidence?: (evidence: ExecutionResourceEvidence) => Promise<void>;
 }
@@ -33,6 +35,7 @@ export async function withOperatorExecutionResources<T>(input: {
   scratchDir: string;
   slice?: string;
   signal?: AbortSignal;
+  nativeLoaderCommand?: () => string;
   onEvidence?: ExecutionResourceContext["onEvidence"];
   onUnitPrepared?: ExecutionResourceContext["onUnitPrepared"];
 }, execute: () => Promise<T>): Promise<T> {

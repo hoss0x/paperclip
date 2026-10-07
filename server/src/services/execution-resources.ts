@@ -1,3 +1,4 @@
+import { resolvePaperclipRunnerBinary } from "./native-runtime/native-codex-runner.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { and, eq } from "drizzle-orm";
@@ -33,6 +34,7 @@ export async function executeWithResourceGovernance(input: {
   const evidence: ExecutionResourceEvidence[] = [];
   return withOperatorExecutionResources({
     scratchDir: input.scratchDir, slice: input.slice, signal: input.signal,
+    nativeLoaderCommand: resolvePaperclipRunnerBinary,
     onUnitPrepared: async unit => input.record({ eventType: RESOURCE_UNIT_PREPARED,
       message: "Resource execution unit prepared", payload: unit }),
     onEvidence: async result => {

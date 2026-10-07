@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import os from "node:os";
+import { PassThrough } from "node:stream";
 import { currentExecutionResources } from "./execution-resource-context.js";
 import { applyLowMemoryEnvironment } from "./execution-resource-policy.js";
 import { prepareSystemdExecution } from "./systemd-execution.js";
@@ -18,6 +19,8 @@ interface StdioLaunchInput {
   nativeLoaderCommand?: string;
   extraStdio?: Array<"pipe" | "ignore" | number>;
   detached?: boolean;
+  /** Terminal commands can finish before their launch identity is polled. */
+  allowEarlyExit?: boolean;
 }
 
 export interface PreparedResourceScopeProcess {
@@ -103,6 +106,19 @@ function spawnStdioProcess(input: StdioLaunchInput,
   if (input.extraStdio?.length && !input.scope) throw new Error("Inherited execution descriptors require a systemd scope");
   const child = spawn(owned.command, owned.args, { cwd: input.cwd, env: process.env,
     stdio: ["pipe", "pipe", "pipe", ...(input.extraStdio ?? [])], detached: input.detached ?? false }) as ChildProcessWithoutNullStreams;
+  // Node flushes raw child pipes when the leader exits. Retain terminal output
+  // before awaiting identity, with ordinary stream backpressure rather than an
+  // unbounded replay buffer. Protocol transports retain their original pipes.
+  const stdout = input.allowEarlyExit ? child.stdout.pipe(new PassThrough()) : child.stdout;
+  const stderr = input.allowEarlyExit ? child.stderr.pipe(new PassThrough()) : child.stderr;
+  const exposedChild = input.allowEarlyExit ? new Proxy(child, {
+    get(target, property) {
+      if (property === "stdout") return stdout;
+      if (property === "stderr") return stderr;
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) : child;
   let cancelled = false;
   let escalation: NodeJS.Timeout | undefined;
   const signal = (requested: NodeJS.Signals) => {
@@ -127,7 +143,12 @@ function spawnStdioProcess(input: StdioLaunchInput,
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal }));
   }) : closed;
+  const identity = owned.identity();
+  void identity.catch(() => {});
   const completion = exited.then(async result => {
+    // Keep the private marker until the terminal readiness waiter has consumed
+    // it. A failed handoff still cleans up; it never becomes a direct spawn.
+    if (input.allowEarlyExit && input.scope) await identity.catch(() => {});
     const evidence = await owned.finish(cancelled);
     await closed;
     release();
@@ -150,7 +171,7 @@ function spawnStdioProcess(input: StdioLaunchInput,
   // Attach before returning/awaiting identity; short-lived failures cannot leak
   // an unhandled rejection while a protocol constructor is being prepared.
   void completion.catch(() => {});
-  const ready = Promise.race([owned.identity(), completion.then(() => {
+  const ready = Promise.race([identity, completion.then(() => {
     throw new Error("Execution stopped before its protocol transport started");
   })]).then(identity => {
     if (input.scope && identity.pid !== child.pid) throw new Error("Scope worker PID changed during handoff");
@@ -162,6 +183,6 @@ function spawnStdioProcess(input: StdioLaunchInput,
     throw error;
   });
   void ready.catch(() => {});
-  const worker = { child, pid: child.pid ?? 0, completion, signal, ready };
+  const worker = { child: exposedChild, pid: child.pid ?? 0, completion, signal, ready };
   return worker;
 }

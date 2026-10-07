@@ -1,3 +1,4 @@
+import { prepareAcpxRuntimeResources } from "./resource-runtime.js";
 import { cancellableSandboxStartup } from "./startup-cancellation.js";
 import { withAdapterExecutionPhase, type AdapterExecutionPhase } from "../execution-phase.js";
 import fs from "node:fs/promises";
@@ -4267,7 +4268,9 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         // Resume with this run's launch environment; keep it out of the saved
         // conversation record without mutating the live runtime's options.
         const runtimeStore = createEphemeralSessionEnvironmentStore(persistedRuntimeStore, prepared.env);
+        const runtimeResources = cached?.runtime ? undefined : await prepareAcpxRuntimeResources({ runId: ctx.runId, cwd: prepared.hostSpawnCwd ?? prepared.cwd });
         const runtimeOptions: PaperclipAcpRuntimeOptions = {
+          spawnProcess: runtimeResources?.spawnProcess,
           cwd: prepared.cwd,
           // Host-only spawn cwd for the relay proxy on the remote process-session
           // lane; `undefined` elsewhere so acpx falls back to `cwd` (byte-identical).
@@ -4319,7 +4322,13 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
           runtime = cached.runtime;
         } else {
           const createRuntimeStart = now();
-          runtime = createRuntime(runtimeOptions);
+          try {
+            const created = createRuntime(runtimeOptions);
+            runtime = runtimeResources?.own(created) ?? created;
+          } catch (error) {
+            await runtimeResources?.close();
+            throw error;
+          }
           createRuntimeMs = now() - createRuntimeStart;
           // The create_runtime phase runs only on a cold start.
           await emitRunPhaseTiming(ctx, "create_runtime", createRuntimeMs, "ok");

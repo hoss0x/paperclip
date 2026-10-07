@@ -213,10 +213,23 @@ files. Quota diagnostics and incomplete RPC lines have finite buffers. HTTP-only
 quota adapters retain their existing provider request timeouts.
 
 The older `adapter-utils/acpx-engine` is a separate execution path from the native
-ACPX driver. Its patched ACPX 0.12 runtime still launches the provider, version
-probes and host-side ACP terminal commands directly. A native driver qualification
-cannot prove containment of these paths. These launches need an operator-owned
-hook and one shared run envelope before resource coverage is complete. SSH/tar
+ACPX driver. Its patched ACPX 0.12 runtime now routes providers and host-side ACP terminal
+commands through an operator-owned launch hook and one shared run envelope.
+The packaged runner retains actual worker PID/group identity; terminal shutdown
+awaits complete unit cleanup, including detached descendants. Runtime close
+releases the session reservation only after verified slice cleanup. Missing loader
+configuration fails closed. ACPX direct-command ENOENT shell fallback is preserved.
+Real tests cover sibling cgroups, exact provider/terminal environment, one-slot
+terminal admission, provider OOM, later recovery and cancellation. Immediate
+terminal commands retain their launch identity until readiness consumes it;
+backpressured streams retain output during that wait. Terminal completion is
+settled from verified cleanup, so an already-exited child or rejected cleanup
+cannot lose its exit notification. Repeated `/bin/true`, actual shell-string
+fallback with output, and cleanup-rejection fixtures pass. ACPX 0.12
+creates an initial provider at ensureSession and a second at startTurn; both
+roots receive the same session envelope. Its internal version/help probes still
+need the launch hook before all older runtime paths are covered. A native driver
+qualification cannot prove containment of these separate paths. SSH/tar
 transport and workspace helper spawns also remain in the inventory; command
 strings executed inside an already-bounded worker must be distinguished from
 host-side controller spawns.
