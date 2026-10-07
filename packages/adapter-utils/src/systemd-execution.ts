@@ -17,6 +17,7 @@ try {
   const file = process.argv[1];
   const config = JSON.parse(fs.readFileSync(file, 'utf8'));
   fs.unlinkSync(file);
+  fs.writeFileSync(config.identityFile, String(process.pid), {mode: 0o600});
   process.chdir(config.cwd);
   let executable;
   for (const candidate of config.command.includes('/')
@@ -47,6 +48,7 @@ export interface SystemdExecutionBoundary {
   args: string[];
   unit: string;
   sample: () => Promise<void>;
+  identity: () => Promise<{ pid: number; unit: string }>;
   signal: (signal: NodeJS.Signals) => Promise<void>;
   finish: (cancelled?: boolean) => Promise<ExecutionResourceEvidence>;
 }
@@ -72,9 +74,10 @@ export async function prepareSystemdExecution(input: {
   const directory = await fs.mkdtemp(path.join(input.scratchDir, "execution-"));
   await fs.chmod(directory, 0o700);
   const invocationFile = path.join(directory, "invocation.json");
+  const identityFile = path.join(directory, "worker.pid");
   const env = Object.fromEntries(Object.entries(input.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   try {
-    await fs.writeFile(invocationFile, JSON.stringify({ command: input.command, args: input.args, cwd: input.cwd, env }), { mode: 0o600 });
+    await fs.writeFile(invocationFile, JSON.stringify({ command: input.command, args: input.args, cwd: input.cwd, env, identityFile }), { mode: 0o600 });
   } catch (error) {
     await fs.rm(directory, { recursive: true, force: true });
     throw error;
@@ -90,7 +93,7 @@ export async function prepareSystemdExecution(input: {
   let finished = false;
   async function readProperties() {
     const { stdout } = await execFileAsync("systemctl", ["--user", "show", unit,
-      "--property=ControlGroup,Result,ExecMainCode,ExecMainStatus"], { timeout: 5_000 });
+      "--property=ControlGroup,Result,ExecMainCode,ExecMainStatus,ExecMainPID"], { timeout: 5_000 });
     const properties = Object.fromEntries(stdout.trim().split("\n").map(line => {
       const separator = line.indexOf("=");
       return [line.slice(0, separator), line.slice(separator + 1)];
@@ -103,6 +106,7 @@ export async function prepareSystemdExecution(input: {
     evidence.mainExitCode = properties.ExecMainCode ? Number(properties.ExecMainCode) : evidence.mainExitCode;
     evidence.mainExitStatus = properties.ExecMainStatus ? Number(properties.ExecMainStatus) : evidence.mainExitStatus;
     evidence.resourceLimitReached ||= properties.Result === "oom-kill";
+    return properties;
   }
   const sample = async () => {
     if (finished) return;
@@ -133,6 +137,17 @@ export async function prepareSystemdExecution(input: {
       "--property=KillMode=control-group", "--property=OOMPolicy=stop",
       "--property=TimeoutStopSec=5s", "--", process.execPath, "--input-type=commonjs", "-e", ENVIRONMENT_LOADER, invocationFile],
     unit, sample,
+    identity: async () => {
+      const deadline = Date.now() + 5_000;
+      do {
+        try {
+          const pid = Number(await fs.readFile(identityFile, "utf8"));
+          if (Number.isSafeInteger(pid) && pid > 0) return { pid, unit };
+        } catch { /* The service loader has not written its identity yet. */ }
+        await new Promise(resolve => setTimeout(resolve, 20));
+      } while (Date.now() < deadline);
+      throw new Error("Execution unit did not report its worker PID");
+    },
     signal: async signal => {
       await execFileAsync("systemctl", ["--user", "kill", "--kill-whom=all", `--signal=${signal}`, unit], { timeout: 5_000 });
     },

@@ -5,6 +5,9 @@ import { constants as fsConstants, promises as fs, type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CONNECTION_INTENT_AGENT_GUIDANCE } from "@paperclipai/shared";
+import { currentExecutionResources } from "./execution-resource-context.js";
+import { applyLowMemoryEnvironment } from "./execution-resource-policy.js";
+import { prepareSystemdExecution, type ExecutionResourceEvidence, type SystemdExecutionBoundary } from "./systemd-execution.js";
 import { sanitizeRemoteExecutionEnv } from "./remote-execution-env.js";
 import {
   buildLocalProcessSandboxSpawnTarget,
@@ -64,6 +67,7 @@ export interface RunProcessResult {
   // duplex control channel died before a clean completion.
   errorCode?: string | null;
   terminalResultCleanup?: TerminalResultCleanupEvidence | null;
+  resourceUsage?: ExecutionResourceEvidence;
 }
 
 export interface TerminalResultCleanupOptions {
@@ -86,10 +90,11 @@ export interface TerminalResultCleanupEvidence {
   forceKilled: boolean;
 }
 
-interface RunningProcess {
+export interface RunningProcess {
   child: ChildProcess;
   graceSec: number;
   processGroupId: number | null;
+  resourceBoundary?: SystemdExecutionBoundary;
 }
 
 interface SpawnTarget {
@@ -121,9 +126,13 @@ function resolveProcessGroupId(child: ChildProcess) {
 
 // Exported so the direct-child fallback branch can be unit-tested directly.
 export function signalRunningProcess(
-  running: Pick<RunningProcess, "child" | "processGroupId">,
+  running: Pick<RunningProcess, "child" | "processGroupId" | "resourceBoundary">,
   signal: NodeJS.Signals,
 ) {
+  if (running.resourceBoundary) {
+    void running.resourceBoundary.signal(signal).catch(error => console.warn({ error }, "failed to signal execution unit"));
+    return;
+  }
   if (
     process.platform !== "win32" &&
     running.processGroupId &&
@@ -4673,6 +4682,7 @@ export async function runChildProcess(
       pid: number;
       processGroupId: number | null;
       startedAt: string;
+      executionUnit?: string;
     }) => Promise<void>;
     terminalResultCleanup?: TerminalResultCleanupOptions;
     stdin?: string;
@@ -4713,39 +4723,93 @@ export async function runChildProcess(
       remoteEnv: opts.remoteExecution ? opts.env : null,
       localProcessSandbox: opts.localProcessSandbox ?? null,
     })
-      .then((target) => {
+      .then(async (target) => {
+        const resources = currentExecutionResources();
+        let release: (() => void) | undefined;
+        let resourceBoundary: SystemdExecutionBoundary | undefined;
+        try {
+          if (resources?.policy.isolation === "systemd") {
+            release = await resources.admission.acquire(resources.policy.memoryMaxBytes, resources.signal);
+            resourceBoundary = await prepareSystemdExecution({ runId, command: target.command, args: target.args,
+              cwd: target.cwd ?? opts.cwd, env: applyLowMemoryEnvironment({ ...mergedEnv, ...target.env }, resources.policy),
+              policy: resources.policy, scratchDir: resources.scratchDir });
+            if (resources.signal?.aborted) throw new Error("Execution cancelled before launch");
+          }
+        } catch (error) {
+          await resourceBoundary?.finish();
+          release?.();
+          await target.cleanup?.();
+          throw error;
+        }
         const childEnv = { ...mergedEnv, ...target.env };
         for (const [key, value] of Object.entries(childEnv)) {
           if (value === undefined) delete childEnv[key];
         }
-        const child = spawn(target.command, target.args, {
-          cwd: target.cwd ?? opts.cwd,
-          env: childEnv,
-          detached: process.platform !== "win32",
-          shell: false,
-          stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
-        }) as ChildProcessWithEvents;
+        let child: ChildProcessWithEvents;
+        try {
+          child = spawn(resourceBoundary?.command ?? target.command, resourceBoundary?.args ?? target.args, {
+            cwd: target.cwd ?? opts.cwd,
+            env: childEnv,
+            detached: process.platform !== "win32",
+            shell: false,
+            stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
+          }) as ChildProcessWithEvents;
+        } catch (error) {
+          await resourceBoundary?.finish();
+          release?.();
+          await target.cleanup?.();
+          throw error;
+        }
         const startedAt = new Date().toISOString();
         const processGroupId = resolveProcessGroupId(child);
 
-        const spawnPersistPromise =
-          typeof child.pid === "number" && child.pid > 0 && opts.onSpawn
-            ? opts
-                .onSpawn({ pid: child.pid, processGroupId, startedAt })
-                .catch((err) => {
-                  onLogError(
-                    err,
-                    runId,
-                    "failed to record child process metadata",
-                  );
-                })
-            : Promise.resolve();
-
-        runningProcesses.set(runId, {
-          child,
-          graceSec: opts.graceSec,
-          processGroupId,
+        const running: RunningProcess = { child, graceSec: opts.graceSec, processGroupId, resourceBoundary };
+        runningProcesses.set(runId, running);
+        let cancelled = false;
+        let workerPid = child.pid ?? null;
+        // Attach all stream/exit listeners synchronously below, before awaiting
+        // identity. The callback and stdin use the real service PID, not the client.
+        let identityFailure: unknown;
+        const identityPromise = resourceBoundary?.identity();
+        const spawnPersistPromise = Promise.resolve(identityPromise).then(async identity => {
+          if (identity) workerPid = identity.pid;
+          if (workerPid && opts.onSpawn) await opts.onSpawn({ pid: workerPid,
+            processGroupId: identity ? null : processGroupId, startedAt,
+            ...(identity ? { executionUnit: identity.unit } : {}) }).catch(err =>
+              onLogError(err, runId, "failed to record child process metadata"));
+          if (resources?.signal?.aborted) await cancelExecution();
+        }).catch(err => {
+          identityFailure = err;
+          onLogError(err, runId, "failed to identify execution unit");
+          if (resourceBoundary) return resourceBoundary.signal("SIGKILL").catch(() => {});
         });
+        let abortKillTimer: NodeJS.Timeout | undefined;
+        const cancelExecution = async () => {
+          cancelled = true;
+          if (resourceBoundary) {
+            await identityPromise;
+            await resourceBoundary.signal("SIGTERM");
+          } else signalRunningProcess(running, "SIGTERM");
+          abortKillTimer ??= setTimeout(() => signalRunningProcess(running, "SIGKILL"), Math.max(1, opts.graceSec) * 1000);
+        };
+        const abort = () => { void cancelExecution().catch(error => onLogError(error, runId, "failed to cancel execution")); };
+        resources?.signal?.addEventListener("abort", abort, { once: true });
+        const sampleTimer = resourceBoundary ? setInterval(() => { void resourceBoundary.sample(); }, 500) : undefined;
+        sampleTimer?.unref();
+        let cleanupPromise: Promise<ExecutionResourceEvidence | undefined> | undefined;
+        const cleanup = () => cleanupPromise ??= (async () => {
+          resources?.signal?.removeEventListener("abort", abort);
+          clearTimeout(abortKillTimer);
+          clearInterval(sampleTimer);
+          await spawnPersistPromise;
+          const evidence = await resourceBoundary?.finish(cancelled);
+          // Never admit a successor before whole-unit cleanup has succeeded.
+          release?.();
+          await target.cleanup?.();
+          if (evidence) await resources?.onEvidence?.(evidence);
+          if (identityFailure) throw identityFailure;
+          return evidence;
+        })();
 
         let timedOut = false;
         let stdout = "";
@@ -4812,28 +4876,29 @@ export async function runChildProcess(
             if (terminalCleanupStarted || timedOut) return;
             terminalCleanupStarted = true;
             terminalCleanupSignal = "SIGTERM";
-            signalRunningProcess({ child, processGroupId }, "SIGTERM");
+            signalRunningProcess(running, "SIGTERM");
             terminalCleanupKillTimer = setTimeout(
               () => {
                 terminalCleanupKillTimer = null;
                 terminalCleanupSignal = "SIGKILL";
                 terminalCleanupForceKilled = true;
-                signalRunningProcess({ child, processGroupId }, "SIGKILL");
+                signalRunningProcess(running, "SIGKILL");
               },
               Math.max(1, opts.graceSec) * 1000,
             );
           }, graceMs);
         };
 
+        let timeoutKillTimer: NodeJS.Timeout | undefined;
         const timeout =
           opts.timeoutSec > 0
             ? setTimeout(() => {
                 timedOut = true;
                 clearTerminalCleanupTimers();
-                signalRunningProcess({ child, processGroupId }, "SIGTERM");
-                setTimeout(
+                signalRunningProcess(running, "SIGTERM");
+                timeoutKillTimer = setTimeout(
                   () => {
-                    signalRunningProcess({ child, processGroupId }, "SIGKILL");
+                    signalRunningProcess(running, "SIGKILL");
                   },
                   Math.max(1, opts.graceSec) * 1000,
                 );
@@ -4887,9 +4952,10 @@ export async function runChildProcess(
 
         child.on("error", (err: Error) => {
           if (timeout) clearTimeout(timeout);
+          clearTimeout(timeoutKillTimer);
           clearTerminalCleanupTimers();
           runningProcesses.delete(runId);
-          void target.cleanup?.();
+          void cleanup().catch(error => onLogError(error, runId, "failed to clean up execution"));
           const errno = (err as NodeJS.ErrnoException).code;
           const pathValue = mergedEnv.PATH ?? mergedEnv.Path ?? "";
           const msg =
@@ -4907,20 +4973,26 @@ export async function runChildProcess(
           "close",
           (code: number | null, signal: NodeJS.Signals | null) => {
             if (timeout) clearTimeout(timeout);
+            clearTimeout(timeoutKillTimer);
             clearTerminalCleanupTimers();
             runningProcesses.delete(runId);
             void logChain.finally(() => {
               void Promise.resolve()
-                .then(() => target.cleanup?.())
-                .finally(() => {
+                .then(() => cleanup())
+                .then((resourceUsage) => {
+                  const workerSignalled = resourceUsage?.mainExitCode === 2 || resourceUsage?.mainExitCode === 3;
+                  const workerSignal = workerSignalled
+                    ? Object.entries(os.constants.signals).find(([, value]) => value === resourceUsage?.mainExitStatus)?.[0] ?? signal
+                    : signal;
                   resolve({
-                    exitCode: code,
-                    signal,
+                    exitCode: workerSignalled ? null : resourceUsage?.mainExitCode === 1 ? resourceUsage.mainExitStatus : code,
+                    signal: workerSignal,
                     timedOut,
                     stdout,
                     stderr,
-                    pid: child.pid ?? null,
+                    pid: workerPid,
                     startedAt,
+                    ...(resourceUsage ? { resourceUsage, errorCode: resourceUsage.resourceLimitReached ? "execution_resource_limit" : null } : {}),
                     terminalResultCleanup: terminalCleanupStarted
                       ? {
                           kind: "terminal_result_cleanup",
@@ -4933,7 +5005,7 @@ export async function runChildProcess(
                         }
                       : null,
                   });
-                });
+                }).catch(reject);
             });
           },
         );

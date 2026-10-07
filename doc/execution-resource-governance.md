@@ -1,8 +1,8 @@
 # Execution resource governance
 
-Implementation in progress on `feat/runtime-resource-governance`. The primitives
-below are tested independently; they are **not yet connected to adapter dispatch
-or native runner transports**. These settings do not currently isolate ordinary
+Implementation in progress on `feat/runtime-resource-governance`. The shared child-process runner now accepts a resource context and is tested
+through real systemd units. That context is **not yet connected to server adapter
+dispatch or native runner transports**. These settings do not currently isolate ordinary
 agent runs. Do not deploy this intermediate branch as a completed resource fix.
 
 ## Shared boundary
@@ -14,6 +14,17 @@ command, arguments, working directory and environment. Its directory has mode
 0700 and its file has mode 0600. A small loader removes that file and uses Node's
 `execve` to replace itself with the command. No extra supervisor remains, and
 stdin/stdout/stderr remain connected through `systemd-run --pipe --wait`.
+
+`execution-resource-context.ts` uses async-local storage to carry an operator
+policy, one admission pool, cancellation and an evidence sink across adapter
+calls. Within that context, `runChildProcess` reserves a whole budget before
+launch, supplies build-tool defaults, samples memory every 500 ms, and releases
+capacity only after whole-unit cleanup. The loader writes a private worker-PID
+marker before `execve`; spawn metadata and stdin gating use that PID, rather than
+the `systemd-run` client PID. Signals target the full unit. Exit results retain
+worker signal semantics and name memory failures `execution_resource_limit`.
+Calls outside this context retain their existing direct-spawn behavior until
+dispatch integration is complete.
 
 The boundary sets `MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `CPUQuota`,
 `TasksMax`, `KillMode=control-group` and `OOMPolicy=stop`. An explicitly requested
