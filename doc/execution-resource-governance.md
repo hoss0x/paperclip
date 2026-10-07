@@ -5,7 +5,10 @@ adapter dispatch now installs the shared operator resource context and persists
 unit ownership before launch. Shared child-runner and native runnerd launcher
 paths are validated through real systemd units. Direct native Codex now uses a
 stream-preserving boundary with JSON-RPC, queued cancellation and descendant
-cleanup tests. Direct OpenCode/ACPX transports still need integration, and full
+cleanup tests. Direct OpenCode now uses the shared descriptor-preserving scope
+through an async launch hook; authenticated HTTP session startup/recovery, queued
+cancellation, descendant cleanup, OOM evidence and a later session have fixture
+coverage. Direct ACPX still needs integration, and full
 native session/resume/restart qualification remains pending. Do not deploy this intermediate branch as a completed resource fix.
 
 ## Shared boundary
@@ -40,7 +43,10 @@ and settles close only after descendant cleanup and terminal evidence. The
 systemd client receives operator user-manager connection variables; the provider
 receives its exact private invocation environment. Startup cancellation reaches
 admission before a process can launch. Existing runnerd/remote factory input
-contracts stay unchanged. Direct OpenCode/ACPX launches remain unfinished.
+contracts stay unchanged. Direct OpenCode forwards launch descriptors and startup/
+recovery signals through an operator hook. Driver close waits for whole-unit
+cleanup; the HTTP/SSE protocol and diagnostic redaction remain in the driver.
+Direct ACPX launches remain unfinished.
 
 Descriptor-preserving launches can instead use a transient systemd scope.
 `systemd-run --scope` retains the worker PID, process group and inherited file
@@ -49,8 +55,8 @@ and removes the same private invocation file, writes worker identity, and replac
 itself through Unix `exec`. It leaves no additional supervisor. Node's
 [`process.execve`](https://nodejs.org/api/process.html#processexecvefile-args-env)
 closes descriptors beyond stdin/stdout/stderr, so the service loader cannot
-preserve verified executable and credential-fence descriptors. Scope support is
-currently a tested shared primitive; OpenCode/ACPX driver wiring is still pending.
+preserve verified executable and credential-fence descriptors. OpenCode uses this scope primitive without replacing its executable descriptor
+with a mutable pathname. ACPX driver wiring is still pending.
 Startup accounting and durable ownership recognize both services and scopes.
 Scope mode requires the packaged runner; it never falls back to an unbounded
 launch. Scope OOM evidence comes from cgroup events and the systemd result;
@@ -156,7 +162,7 @@ log. A memory kill overrides an adapter success or parser failure with
 Tests exercise failed ownership persistence, OOM projection/recovery, native
 launcher context propagation, and real surviving-unit admission reconstruction.
 
-Remaining before handoff: direct OpenCode/ACPX transport integration and full session/
+Remaining before handoff: direct ACPX transport integration and full session/
 resume/cancellation/restart coverage, integrated
 UI/API/PostgreSQL stress and low-memory measurements, full checks, internal
 review, and the focused PR. No live deployment or resource-PR merge is authorized.

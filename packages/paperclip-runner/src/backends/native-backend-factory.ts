@@ -14,6 +14,7 @@ import {
   createAcpxNativeSessionBackend,
   type CodexAcpxNativeSessionBackendOptions,
 } from "./codex-acpx-native-backend.js";
+import type { OpenCodeServerDriverOptions } from "../drivers/opencode/opencode-server-driver.js";
 import { createOpenCodeNativeSessionBackend } from "./opencode-native-backend.js";
 
 export interface NativeBackendFactoryOptions extends Omit<
@@ -37,6 +38,7 @@ export interface NativeBackendFactoryOptions extends Omit<
   opencodeRuntimeDirectory?: string;
   opencodeEnvironment?: NodeJS.ProcessEnv;
   opencodeCommand?: string;
+  opencodeProcessLauncher?: OpenCodeServerDriverOptions["processLauncher"];
 }
 
 /**
@@ -72,6 +74,7 @@ export function createNativeSessionBackend(
       runtimeDirectory: options.opencodeRuntimeDirectory,
       environment: options.opencodeEnvironment,
       command: options.opencodeCommand,
+      processLauncher: options.opencodeProcessLauncher,
       runnerInstanceId: options.runnerInstanceId,
       onSpawn: options.onSpawn,
       dynamicTools: options.dynamicTools,
