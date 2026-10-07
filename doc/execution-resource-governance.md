@@ -202,3 +202,27 @@ Remaining before handoff: full direct-native session/resume/cancellation/restart
 coverage and older helper-spawn inventory, integrated
 UI/API/PostgreSQL stress and low-memory measurements, full checks, internal
 review, and the focused PR. No live deployment or resource-PR merge is authorized.
+
+## Quota polling and remaining helper paths
+
+Quota polling now installs the same operator context as run dispatch. Simultaneous
+UI polls share one request. Its 20-second deadline aborts both queued admission
+and running subprocesses. Codex quota JSON-RPC uses the shared bounded stdio
+launcher; shutdown awaits complete unit cleanup before removing private launch
+files. Quota diagnostics and incomplete RPC lines have finite buffers. HTTP-only
+quota adapters retain their existing provider request timeouts.
+
+The older `adapter-utils/acpx-engine` is a separate execution path from the native
+ACPX driver. Its patched ACPX 0.12 runtime still launches the provider, version
+probes and host-side ACP terminal commands directly. A native driver qualification
+cannot prove containment of these paths. These launches need an operator-owned
+hook and one shared run envelope before resource coverage is complete. SSH/tar
+transport and workspace helper spawns also remain in the inventory; command
+strings executed inside an already-bounded worker must be distinguished from
+host-side controller spawns.
+
+A bounded compiler diagnostic excluded 258 colocated server test roots without
+changing the repository configuration. It still approached the existing 2.2 GiB
+validation ceiling and did not finish by the diagnostic deadline. Test inclusion
+alone does not explain the server compiler memory problem. No full server
+compiler pass or low-memory VPS claim follows from this diagnostic.

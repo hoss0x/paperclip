@@ -1,3 +1,7 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
 import type { ProviderQuotaResult } from "@paperclipai/shared";
 import { listServerAdapters } from "../adapters/registry.js";
 
@@ -20,11 +24,23 @@ function providerSlugForAdapterType(type: string): string {
  * Individual adapter failures are caught and returned as error results rather than
  * letting one provider's outage block the entire response.
  */
-export async function fetchAllQuotaWindows(): Promise<ProviderQuotaResult[]> {
+let pendingQuotaPoll: Promise<ProviderQuotaResult[]> | undefined;
+
+export function fetchAllQuotaWindows(): Promise<ProviderQuotaResult[]> {
+  return pendingQuotaPoll ??= pollQuotaWindows().finally(() => { pendingQuotaPoll = undefined; });
+}
+
+async function pollQuotaWindows(): Promise<ProviderQuotaResult[]> {
   const adapters = listServerAdapters().filter((a) => a.getQuotaWindows != null);
 
   const settled = await Promise.allSettled(
-    adapters.map((adapter) => withQuotaTimeout(adapter.type, adapter.getQuotaWindows!())),
+    adapters.map(async adapter => {
+      const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-quota-"));
+      const controller = new AbortController();
+      const task = withOperatorExecutionResources({ scratchDir, signal: controller.signal }, () => adapter.getQuotaWindows!())
+        .finally(() => fs.rm(scratchDir, { recursive: true, force: true }));
+      return withQuotaTimeout(adapter.type, task, controller);
+    }),
   );
 
   return settled.map((result, i) => {
@@ -42,6 +58,7 @@ export async function fetchAllQuotaWindows(): Promise<ProviderQuotaResult[]> {
 async function withQuotaTimeout(
   adapterType: string,
   task: Promise<ProviderQuotaResult>,
+  controller: AbortController,
 ): Promise<ProviderQuotaResult> {
   let timeoutId: NodeJS.Timeout | null = null;
   try {
@@ -49,6 +66,7 @@ async function withQuotaTimeout(
       task,
       new Promise<ProviderQuotaResult>((resolve) => {
         timeoutId = setTimeout(() => {
+          controller.abort();
           resolve({
             provider: providerSlugForAdapterType(adapterType),
             ok: false,
