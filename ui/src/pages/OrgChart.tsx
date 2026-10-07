@@ -613,7 +613,7 @@ export function OrgChart({ orgTree: providedOrgTree, agents: providedAgents, emb
                 aria-label={`${node.name}, ${agent?.title ?? roleLabel(node.role)}`}
                 key={node.id}
                 data-org-card
-                className="org-agent-node group absolute flex flex-col items-center gap-2 rounded-lg p-2 text-center cursor-pointer select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="org-agent-node absolute flex flex-col items-center gap-2 p-2 text-center cursor-pointer select-none"
                 style={{
                   left: node.x,
                   top: node.y,

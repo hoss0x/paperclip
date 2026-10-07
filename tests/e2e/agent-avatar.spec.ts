@@ -60,7 +60,61 @@ test("profile photos persist, replace and reset across the organization chart", 
     });
     expect(await geometry(uploaded)).toEqual(await geometry(fallback));
     await evidence("organization-light.png");
-    await uploaded.hover();
+    const interactionStyle = (node: typeof uploaded) => node.evaluate(el => {
+      const avatar = el.querySelector('[data-slot="agent-avatar"]')!;
+      const buttonStyle = getComputedStyle(el);
+      const avatarStyle = getComputedStyle(avatar);
+      return {
+        background: buttonStyle.backgroundColor, outline: buttonStyle.outlineStyle,
+        nodeShadow: buttonStyle.boxShadow, portraitShadow: avatarStyle.boxShadow,
+        circular: parseFloat(avatarStyle.borderRadius) >= parseFloat(avatarStyle.width) / 2,
+        clipped: avatarStyle.overflow === "hidden", focusVisible: el.matches(":focus-visible"),
+      };
+    });
+    const settlePortrait = (node: typeof uploaded) => node.locator('[data-slot="agent-avatar"]').evaluate(async el => {
+      getComputedStyle(el).boxShadow;
+      await Promise.all(el.getAnimations().map(animation => animation.finished));
+    });
+    for (const mode of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: mode });
+      if (mode === "dark") await expect(page.locator("html")).toHaveClass(/dark/);
+      else await expect(page.locator("html")).not.toHaveClass(/dark/);
+      await page.mouse.move(0, 0);
+      const resting = await interactionStyle(uploaded);
+      for (const node of [uploaded, fallback]) {
+        await node.evaluate(el => el.blur());
+        await node.hover();
+        await settlePortrait(node);
+        await expect.poll(async () => (await interactionStyle(node)).portraitShadow).not.toBe(resting.portraitShadow);
+        expect(await interactionStyle(node)).toMatchObject({
+          background: "rgba(0, 0, 0, 0)", outline: "none", nodeShadow: "none", circular: true, clipped: true,
+        });
+        const hovered = await interactionStyle(node);
+        await page.keyboard.press("Tab");
+        await node.focus();
+        await settlePortrait(node);
+        await expect.poll(async () => (await interactionStyle(node)).focusVisible).toBe(true);
+        await expect.poll(async () => (await interactionStyle(node)).portraitShadow).not.toBe(hovered.portraitShadow);
+        expect(await interactionStyle(node)).toMatchObject({
+          outline: "none", nodeShadow: "none", circular: true, clipped: true,
+        });
+      }
+      await uploaded.hover();
+      await fallback.focus();
+      await Promise.all([settlePortrait(uploaded), settlePortrait(fallback)]);
+      await evidence(`organization-${mode}-photo-hover-fallback-focus.png`);
+      await fallback.hover();
+      await uploaded.focus();
+      await Promise.all([settlePortrait(uploaded), settlePortrait(fallback)]);
+      await evidence(`organization-${mode}-photo-focus-fallback-hover.png`);
+      await uploaded.hover();
+      await page.mouse.down();
+      expect(await uploaded.evaluate(el => el.matches(":active"))).toBe(true);
+      expect(await interactionStyle(uploaded)).toMatchObject({ outline: "none", nodeShadow: "none", circular: true });
+      await page.mouse.move(0, 0);
+      await page.mouse.up();
+    }
+    await page.emulateMedia({ colorScheme: "light" });
     await uploaded.focus();
     await evidence("organization-focus.png");
     const layer = page.getByTestId("org-chart-card-layer");
