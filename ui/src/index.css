@@ -3408,3 +3408,36 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
 @media (max-height: 420px) {
   .agent-setup-popover { overflow-y: auto; }
 }
+
+/* Organization portraits share geometry across uploaded and generated identities.
+   Keep the interaction on the portrait; the button includes the name and title
+   for a generous hit target without painting a rectangular card. */
+:root {
+  --org-node-height: 144px;
+  --org-portrait-ring: 3px;
+  --org-portrait-focus-offset: 2px;
+  --org-portrait-hover-scale: 1.04;
+  --org-portrait-active-scale: 1;
+  --org-portrait-hover-shadow: 0 0 0 var(--org-portrait-ring) color-mix(in oklab, var(--ring) 25%, transparent), var(--shadow-sm);
+  --org-portrait-focus-shadow: 0 0 0 var(--org-portrait-focus-offset) var(--background), 0 0 0 calc(var(--org-portrait-focus-offset) + var(--org-portrait-ring)) var(--ring), var(--shadow-sm);
+  --org-connector-width: 1.5px;
+}
+.org-agent-node { outline: none; background: transparent; box-shadow: none; }
+.org-agent-portrait {
+  transition: box-shadow var(--motion-duration-fast) var(--motion-ease-standard), transform var(--motion-duration-fast) var(--motion-ease-standard);
+}
+.org-agent-node:hover .org-agent-portrait {
+  box-shadow: var(--org-portrait-hover-shadow);
+  transform: scale(var(--org-portrait-hover-scale));
+}
+.org-agent-node:focus-visible .org-agent-portrait {
+  box-shadow: var(--org-portrait-focus-shadow);
+}
+.org-agent-node:active .org-agent-portrait {
+  transform: scale(var(--org-portrait-active-scale));
+  box-shadow: var(--org-portrait-focus-shadow);
+}
+@media (prefers-reduced-motion: reduce) {
+  .org-agent-portrait { transition: none; transform: none !important; }
+}
+.org-chart-connector { stroke-width: var(--org-connector-width); }

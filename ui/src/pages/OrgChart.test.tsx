@@ -63,6 +63,7 @@ const agents = [
     name: "CEO",
     role: "ceo",
     title: null,
+    avatarUrl: "/api/assets/11111111-1111-4111-8111-111111111111/content",
     status: "active",
     reportsTo: null,
     capabilities: null,
@@ -139,7 +140,8 @@ describe("OrgChart mobile gestures", () => {
       defaultOptions: { queries: { retry: false } },
     });
     viewportWidth = 360;
-    viewportHeight = 520;
+    viewportHeight = 608;
+    document.documentElement.style.setProperty("--org-node-height", "144px");
     orgMock.mockResolvedValue(orgTree);
     listMock.mockResolvedValue(agents);
 
@@ -189,6 +191,7 @@ describe("OrgChart mobile gestures", () => {
         root.unmount();
       });
     }
+    document.documentElement.style.removeProperty("--org-node-height");
     container.remove();
     document.body.innerHTML = "";
     vi.restoreAllMocks();
@@ -211,6 +214,21 @@ describe("OrgChart mobile gestures", () => {
       layer: container.querySelector('[data-testid="org-chart-card-layer"]') as HTMLDivElement,
     };
   }
+
+  it("uses equal circular geometry for uploaded and generated avatars", async () => {
+    await renderOrgChart();
+    const nodes = container.querySelectorAll("[data-org-card]");
+    expect(nodes).toHaveLength(2);
+    const avatars = container.querySelectorAll('[data-slot="agent-avatar"]');
+    expect(avatars[0].className).toContain("rounded-full");
+    expect(avatars[1].className).toContain("rounded-full");
+    expect(avatars[0].className).toBe(avatars[1].className);
+    expect(avatars[0].querySelector("img")?.getAttribute("src")).toBe(agents[0].avatarUrl);
+    expect(avatars[1].querySelector("img")?.getAttribute("src")).toContain("/api/agent-avatars/");
+    expect(nodes[0].tagName).toBe("BUTTON");
+    expect(nodes[0].getAttribute("aria-label")).toContain("CEO");
+    expect(container.querySelector("svg path")).not.toBeNull();
+  });
 
   it("pans the chart with one-finger touch drag", async () => {
     const { viewport, layer } = await renderOrgChart();

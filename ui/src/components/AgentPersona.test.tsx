@@ -45,6 +45,29 @@ describe("agent persona presentation", () => {
     expect(host.textContent).toBe("CS");
     expect(host.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Chief of Staff");
   });
+  it("uses the uploaded photo without a generated srcset and recovers through the default avatar", async () => {
+    const avatarUrl = "/api/assets/11111111-1111-4111-8111-111111111111/content";
+    await act(async () => root.render(<AgentAvatar agent={{ name: "Omar", avatarUrl }} size={64} />));
+    expect(host.querySelector("img")?.getAttribute("src")).toBe(avatarUrl);
+    expect(host.querySelector("img")?.getAttribute("srcset")).toBeNull();
+    expect(host.querySelector("img")?.className).toContain("object-cover");
+    await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+    expect(host.querySelector("img")?.getAttribute("src")).toContain("/api/agent-avatars/");
+    await act(async () => host.querySelector("img")!.dispatchEvent(new Event("error")));
+    expect(host.textContent).toBe("OM");
+    expect(host.firstElementChild?.className).toContain("size-16");
+    expect(host.firstElementChild?.className).toContain("rounded-full");
+  });
+  it.each(["https://example.com/photo.png", "file:///portrait.png", "data:image/png;base64,AAA"])("ignores non-asset avatar URLs: %s", async (avatarUrl) => {
+    await act(async () => root.render(<AgentAvatar agent={{ avatarUrl }} size={64} />));
+    expect(host.querySelector("img")?.getAttribute("src")).toContain("/api/agent-avatars/");
+  });
+  it("shows custom photos in the character header without a live renderer", async () => {
+    await act(async () => root.render(<AgentCharacter agent={{ avatarUrl: "/api/assets/11111111-1111-4111-8111-111111111111/content" }} size={96} />));
+    await show();
+    expect(createCharacter).not.toHaveBeenCalled();
+    expect(host.querySelector("img")?.width).toBe(96);
+  });
   it("allows only one live character, releases it offscreen and disposes on unmount", async () => {
     await act(async () => root.render(<><AgentCharacter appearance={appearance} /><AgentCharacter appearance={appearance} /></>));
     expect(createCharacter).not.toHaveBeenCalled();

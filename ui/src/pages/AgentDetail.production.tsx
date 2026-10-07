@@ -1,3 +1,4 @@
+import { AgentAvatarControl } from "../components/AgentAvatarControl";
 import { AgentCharacter } from "../components/AgentCharacter";
 import { characterStateForAgent } from "@paperclipai/shared";
 import { mergeRunLogChunks, readChunkSeq } from "../lib/run-log-chunks";
@@ -2183,6 +2184,7 @@ function ConfigurationTab({
 
   return (
     <div className="space-y-6">
+      {content === "configuration" ? <AgentAvatarControl agent={agent} /> : null}
       <AgentConfigForm
         mode="edit"
         agent={agent}

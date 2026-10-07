@@ -1,6 +1,7 @@
 import { AgentConnectionInstructions } from "@/features/connections/ConnectionInstructions";
 import type { AgentInstructionCandidate, AgentInstructionsBundle } from "@paperclipai/shared";
 import { InstructionHistory } from "../components/InstructionHistory";
+import { AgentAvatarControl } from "../components/AgentAvatarControl";
 import { AgentCharacter } from "../components/AgentCharacter";
 import { characterStateForAgent } from "@paperclipai/shared";
 import { mergeRunLogChunks, readChunkSeq } from "../lib/run-log-chunks";
@@ -2056,6 +2057,7 @@ export function ConfigurationTab({
 
   return (
     <div className="agent-settings-form space-y-6">
+      {content === "runtime" ? <AgentAvatarControl agent={agent} /> : null}
       {content !== "permissions" ? <AgentConfigForm
         mode="edit"
         agent={agent}

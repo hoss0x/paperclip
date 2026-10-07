@@ -89,6 +89,7 @@ export interface Agent {
   icon: string | null;
   appearance?: AgentAppearance | null;
   avatarUrl?: string;
+  avatarAssetId?: string | null;
   status: AgentStatus;
   reportsTo: string | null;
   capabilities: string | null;

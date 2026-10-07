@@ -109,6 +109,7 @@ import {
 } from "./routes/instance-database-backups.js";
 import { llmRoutes } from "./routes/llms.js";
 import { authRoutes } from "./routes/auth.js";
+import { agentAvatarUploadRoutes } from "./routes/agent-avatar-uploads.js";
 import { assetRoutes } from "./routes/assets.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
@@ -748,6 +749,7 @@ export async function createApp(
     }),
   );
   api.use(assetRoutes(db, opts.storageService));
+  api.use(agentAvatarUploadRoutes(db, opts.storageService));
   api.use(projectToolRoutes(db));
   api.use(projectRoutes(db));
   api.use(caseRoutes(db, opts.storageService));
