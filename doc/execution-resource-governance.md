@@ -67,6 +67,18 @@ validated but not yet connected to ACPX. ACPX has persistent and transient comma
 roots within one runtime; those roots need one run envelope, rather than competing
 for separate full-budget slots. Per-command admission with one slot could block
 status/control requests behind the runtime they must control.
+`prepareExecutionRunEnvelope` now reserves one global slot for a session and
+creates a child slice under the operator aggregate. Persistent and transient
+roots borrow that reservation. Their combined memory, swap, CPU and task use is
+bounded by the child slice, even while control commands overlap the persistent
+runtime. The owner retains capacity while the session is idle and explicitly
+closes the envelope after the session. Cancellation stops the slice and waits
+for verified root cleanup before releasing capacity; failed cleanup retains it.
+Periodic cgroup samples detect a memory kill, stop the other roots, and propagate
+the shared limit failure into each root's local run evidence. Startup recovery
+groups surviving roots by their envelope and counts its budget once. Real tests
+cover concurrent roots with a single global slot, queued cancellation, unused
+prepared roots, shared OOM containment and recovery. ACPX wiring remains pending.
 Scope mode requires the packaged runner; it never falls back to an unbounded
 launch. Scope OOM evidence comes from cgroup events and the systemd result;
 `OOMPolicy=stop` applies to services only.

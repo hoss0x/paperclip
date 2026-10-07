@@ -14,17 +14,38 @@ export async function listActiveExecutionUnits(slice: string): Promise<ExistingE
   if (!units.length) return [];
   const { stdout: properties } = await execFileAsync("systemctl", ["--user", "show", ...units,
     "--property=Id,Slice,ActiveState,MemoryMax"], { timeout: 5_000, maxBuffer: 1024 * 1024 });
-  return properties.trim().split(/\n\n/).flatMap(block => {
+  const groups = new Map<string, ExistingExecutionUnit>();
+  const envelopes = new Set<string>();
+  for (const block of properties.trim().split(/\n\n/)) {
     const values = Object.fromEntries(block.split("\n").map(line => {
       const separator = line.indexOf("=");
       return [line.slice(0, separator), line.slice(separator + 1)];
     }));
-    if (values.Slice !== slice || ["inactive", "failed"].includes(values.ActiveState ?? "")) return [];
+    if (["inactive", "failed"].includes(values.ActiveState ?? "")) continue;
+    const nestedPrefix = `${slice.slice(0, -6)}-run`;
+    const nested = values.Slice?.startsWith(nestedPrefix)
+      && /^[a-f0-9]{32}\.slice$/.test(values.Slice.slice(nestedPrefix.length));
+    if (values.Slice !== slice && !nested) continue;
     if (!values.Id || !units.includes(values.Id) || !values.ActiveState) throw new Error("Incomplete execution unit state");
+    if (nested) { envelopes.add(values.Slice!); continue; }
     const memoryMaxBytes = Number(values.MemoryMax);
     if (!Number.isSafeInteger(memoryMaxBytes) || memoryMaxBytes < 1) throw new Error("Surviving execution unit has no bounded memory budget");
-    return [{ unit: values.Id, memoryMaxBytes }];
-  });
+    groups.set(values.Id, { unit: values.Id, memoryMaxBytes });
+  }
+  if (envelopes.size) {
+    const { stdout: budgets } = await execFileAsync("systemctl", ["--user", "show", ...envelopes,
+      "--property=Id,MemoryMax"], { timeout: 5_000, maxBuffer: 1024 * 1024 });
+    for (const block of budgets.trim().split(/\n\n/)) {
+      const values = Object.fromEntries(block.split("\n").map(line => line.split("=")));
+      const memoryMaxBytes = Number(values.MemoryMax);
+      if (!values.Id || !envelopes.has(values.Id) || !Number.isSafeInteger(memoryMaxBytes) || memoryMaxBytes < 1) {
+        throw new Error("Surviving execution run envelope has no bounded memory budget");
+      }
+      groups.set(values.Id, { unit: values.Id, memoryMaxBytes });
+    }
+    if ([...envelopes].some(unit => !groups.has(unit))) throw new Error("Incomplete execution run envelope accounting");
+  }
+  return [...groups.values()];
 }
 
 /** Reserve survivors once, then release only when the OS confirms they stopped.

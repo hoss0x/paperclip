@@ -7,6 +7,8 @@ import { listActiveExecutionUnits, reconcileExecutionAdmission } from "./executi
 export interface ExecutionResourceContext {
   policy: ExecutionResourcePolicy;
   admission: ExecutionResourceAdmission;
+  /** Root leases within an already-reserved, bounded run envelope. */
+  rootAdmission?: Pick<ExecutionResourceAdmission, "acquire">;
   scratchDir: string;
   slice?: string;
   signal?: AbortSignal;
