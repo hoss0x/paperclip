@@ -8,8 +8,8 @@ stream-preserving boundary with JSON-RPC, queued cancellation and descendant
 cleanup tests. Direct OpenCode now uses the shared descriptor-preserving scope
 through an async launch hook; authenticated HTTP session startup/recovery, queued
 cancellation, descendant cleanup, OOM evidence and a later session have fixture
-coverage. Direct ACPX still needs integration, and full
-native session/resume/restart qualification remains pending. Do not deploy this intermediate branch as a completed resource fix.
+coverage. Direct ACPX now prepares one server-owned session envelope and bounded
+verified command roots. Full native session/resume/restart qualification remains pending. Do not deploy this intermediate branch as a completed resource fix.
 
 ## Shared boundary
 
@@ -46,7 +46,7 @@ admission before a process can launch. Existing runnerd/remote factory input
 contracts stay unchanged. Direct OpenCode forwards launch descriptors and startup/
 recovery signals through an operator hook. Driver close waits for whole-unit
 cleanup; the HTTP/SSE protocol and diagnostic redaction remain in the driver.
-Direct ACPX launches remain unfinished.
+Direct ACPX uses a server-owned envelope and prepared descriptor handoffs.
 
 Descriptor-preserving launches can instead use a transient systemd scope.
 `systemd-run --scope` retains the worker PID, process group and inherited file
@@ -56,14 +56,15 @@ itself through Unix `exec`. It leaves no additional supervisor. Node's
 [`process.execve`](https://nodejs.org/api/process.html#processexecvefile-args-env)
 closes descriptors beyond stdin/stdout/stderr, so the service loader cannot
 preserve verified executable and credential-fence descriptors. OpenCode uses this scope primitive without replacing its executable descriptor
-with a mutable pathname. ACPX driver wiring is still pending.
+with a mutable pathname. ACPX forwards its verified descriptor layout through the
+same scope handoff.
 Startup accounting and durable ownership recognize both services and scopes.
 `prepareResourceScopeProcess` can reserve capacity and persist unit ownership
 before a verified launcher duplicates descriptors. Its single-use synchronous
 spawn returns a stable child PID, inherited pipes/descriptors, a readiness promise
 and the same tracked completion path as the async transports. Closing or cancelling
 an unused preparation releases its reservation only after cleanup. This seam is
-validated but not yet connected to ACPX. ACPX has persistent and transient command
+connected to the ACPX command resource owner. ACPX has persistent and transient command
 roots within one runtime; those roots need one run envelope, rather than competing
 for separate full-budget slots. Per-command admission with one slot could block
 status/control requests behind the runtime they must control.
@@ -78,7 +79,7 @@ Periodic cgroup samples detect a memory kill, stop the other roots, and propagat
 the shared limit failure into each root's local run evidence. Startup recovery
 groups surviving roots by their envelope and counts its budget once. Real tests
 cover concurrent roots with a single global slot, queued cancellation, unused
-prepared roots, shared OOM containment and recovery. ACPX wiring remains pending.
+prepared roots, shared OOM containment and recovery. ACPX now uses this envelope.
 The verified ACPX installation now accepts an operator-owned synchronous process
 launcher after it constructs its exact arguments, environment and inherited
 descriptors. Native-distribution and qualified-package leases use the same seam;
@@ -86,8 +87,13 @@ all digest, guardian and credential-fence checks remain in the verified launcher
 The runtime host can prepare both its initial command and replacements through
 one operator callback. A real scope fixture passed guardian ownership, inherited
 credential fences, provider-exit proof and a transient verified command beside
-the persistent sentinel with one global slot. Production session ownership and
-credential-safe envelope teardown still need wiring and qualification.
+the persistent sentinel with one global slot. Production dispatch now selects this command resource owner through the backend
+factory and driver. Both initial and replacement leases use prepared scopes.
+The runtime host retains credential authority until graceful runtime exit proof
+and verified command-resource cleanup both complete. An idle session retains its
+budget until host close. Concurrent abort and runtime cleanup share one lease-close
+attempt; failed leases remain retryable. Full session/recovery/stress qualification
+is still pending.
 Scope mode requires the packaged runner; it never falls back to an unbounded
 launch. Scope OOM evidence comes from cgroup events and the systemd result;
 `OOMPolicy=stop` applies to services only.
@@ -192,7 +198,7 @@ log. A memory kill overrides an adapter success or parser failure with
 Tests exercise failed ownership persistence, OOM projection/recovery, native
 launcher context propagation, and real surviving-unit admission reconstruction.
 
-Remaining before handoff: direct ACPX transport integration and full session/
-resume/cancellation/restart coverage, integrated
+Remaining before handoff: full direct-native session/resume/cancellation/restart
+coverage and older helper-spawn inventory, integrated
 UI/API/PostgreSQL stress and low-memory measurements, full checks, internal
 review, and the focused PR. No live deployment or resource-PR merge is authorized.

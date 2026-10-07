@@ -33,6 +33,7 @@ export interface NativeBackendFactoryOptions extends Omit<
   }) => CodexAppServerTransport;
   acpxRuntimeDirectory?: string;
   acpxEnvironment?: NodeJS.ProcessEnv;
+  acpxPrepareCommandResources?: CodexAcpxNativeSessionBackendOptions["prepareCommandResources"];
   acpxManagedCodexCredentialSourcePath?: string;
   acpxDynamicToolHandler?: CodexAcpxNativeSessionBackendOptions["dynamicToolHandler"];
   opencodeRuntimeDirectory?: string;
@@ -88,6 +89,7 @@ export function createNativeSessionBackend(
     return createAcpxNativeSessionBackend(input, {
       runtimeDirectory: options.acpxRuntimeDirectory,
       environment: options.acpxEnvironment,
+      prepareCommandResources: options.acpxPrepareCommandResources,
       ...(input.provider.agent === "codex"
         ? {
             managedCodexCredentialSourcePath:

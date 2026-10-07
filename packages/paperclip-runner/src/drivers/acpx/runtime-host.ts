@@ -214,6 +214,7 @@ export interface AcpxRuntimeHostDependencies {
 }
 
 export interface OpenAcpxRuntimeHostOptions {
+  prepareCommandResources?: (input: { cwd: string; signal?: AbortSignal }) => Promise<AcpxCommandResources>;
   /** Operator-owned command preparation, including replacement control roots. */
   openCommand?: (installation: VerifiedAcpxInstallation) => Promise<VerifiedAcpxCommandLease>;
   /** Explicit task execution policy; never inferred from auto-approval. Required for Pi. */
@@ -237,6 +238,11 @@ export interface OpenAcpxRuntimeHostOptions {
   signal?: AbortSignal;
   semanticTools?: AcpxSemanticToolSession;
   onGoalUpdate?: (goal: AcpxRuntimeGoalSnapshot | null) => void;
+}
+
+export interface AcpxCommandResources {
+  openCommand(installation: VerifiedAcpxInstallation): Promise<VerifiedAcpxCommandLease>;
+  close(): Promise<void>;
 }
 
 const RETAINED_CLEANUP_RETRY_INITIAL_DELAY_MS = 10;
@@ -362,6 +368,7 @@ export class AcpxRuntimeHost {
     }
     let admissionSucceeded = false;
     let command: VerifiedAcpxCommandLease | null = null;
+    let commandResources: AcpxCommandResources | null = null;
     let credential: AcpxProviderLifetimeLease | null = null;
     let toolBridge: RunnerToolBridge | null = null;
     let runtime: AcpxRuntimePort | null = null;
@@ -391,6 +398,7 @@ export class AcpxRuntimeHost {
         cleanup: Promise.resolve(),
       };
       const ownedCleanup = cleanup.then(async () => {
+        await command?.close();
         await cleanupAbortedRuntimeAdmission(
           null,
           retained.credential,
@@ -403,6 +411,17 @@ export class AcpxRuntimeHost {
       retainRuntimeHostCleanup(ownedCleanup);
     };
     try {
+      if (options.prepareCommandResources) {
+        commandResources = await acquireAbortableAdmissionResource({
+          signal: options.signal,
+          acquire: () => options.prepareCommandResources!({ cwd: binding.workspacePath, signal: options.signal }),
+          resource: "command",
+          releaseLate: resource => resource.close(),
+          reportFailure: failure => dependencies.reportRetainedCleanupFailure(failure),
+        });
+        const resources = commandResources;
+        command = { spawn: () => { throw new Error("ACPX command is not prepared"); }, close: () => resources.close() };
+      }
       const sandbox = await runAbortableAdmissionStage(
         options.signal,
         () =>
@@ -496,7 +515,7 @@ export class AcpxRuntimeHost {
       }
       command = await acquireAbortableAdmissionResource({
         signal: options.signal,
-        acquire: () => options.openCommand?.(installation) ?? installation.openCommand(),
+        acquire: () => commandResources?.openCommand(installation) ?? options.openCommand?.(installation) ?? installation.openCommand(),
         resource: "command",
         releaseLate: (lateCommand) => lateCommand.close(),
         reportFailure: (failure) =>
@@ -504,9 +523,12 @@ export class AcpxRuntimeHost {
       });
       const commandOwner = createAcpxCommandLeaseOwner(
         command,
-        () => options.openCommand?.(installation) ?? installation.openCommand(),
+        () => commandResources?.openCommand(installation) ?? options.openCommand?.(installation) ?? installation.openCommand(),
       );
-      command = commandOwner.command;
+      command = commandResources ? {
+        spawn: (...args) => commandOwner.command.spawn(...args),
+        close: async () => { await commandOwner.command.close(); await commandResources!.close(); },
+      } : commandOwner.command;
       toolBridge = options.semanticTools
         ? await acquireAbortableAdmissionResource({
             signal: options.signal,
@@ -1183,11 +1205,9 @@ async function cleanupRuntimeResources(
       return error;
     }
   };
-  // The command lease owns only the already-consumed verified launch
-  // snapshot, so it can be released as shutdown starts. The credential is
-  // different: a provider whose exact runtime close is pending or failed may
-  // still read or rewrite its home. Retain both the staged bytes and the
-  // exclusive home lease until that exact close succeeds.
+  // Start snapshot/resource cleanup alongside graceful runtime shutdown.
+  // Credential authority remains fenced until both runtime exit proof and
+  // bounded command-resource cleanup succeed.
   const runtimeOutcome = runtime
     ? settle(() => runtime.close({ reason }))
     : Promise.resolve(null);
@@ -1202,7 +1222,8 @@ async function cleanupRuntimeResources(
     : Promise.resolve(null);
   const credentialOutcome = (async (): Promise<unknown | null> => {
     const runtimeError = await runtimeOutcome;
-    if (runtimeError !== null || credential === null) return null;
+    const commandError = await commandOutcome;
+    if (runtimeError !== null || commandError !== null || credential === null) return null;
     return await settle(() => credential.close());
   })();
   const outcomes = await Promise.all([

@@ -1,4 +1,5 @@
 import { createResourceOpenCodeLauncher } from "./resource-opencode-launcher.js";
+import { createResourceAcpxCommands } from "./resource-acpx-commands.js";
 import { createResourceCodexTransport } from "./resource-codex-transport.js";
 import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
 import { resolveAcpxQualification } from "./acpx-qualification.js";
@@ -8364,6 +8365,7 @@ async function executePaperclipNativeSessionWithinScope(
                 opencodeProcessLauncher: createResourceOpenCodeLauncher(input.execution.binding.runId, resolvePaperclipRunnerBinary),
                 opencodeEnvironment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
                 acpxEnvironment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
+                acpxPrepareCommandResources: createResourceAcpxCommands(input.execution.binding.runId, resolvePaperclipRunnerBinary),
                 opencodeRuntimeDirectory: resolve(
                   resolvePaperclipInstanceRoot(),
                   "runtime",
