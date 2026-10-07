@@ -2,6 +2,7 @@ import { createAcpRuntime } from 'acpx/runtime';
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
@@ -11,6 +12,7 @@ import { ensureSystemdExecutionSlice } from '../systemd-execution-slice.js';
 import type { ExecutionResourceEvidence } from '../systemd-execution.js';
 import { prepareAcpxRuntimeResources } from './resource-runtime.js';
 import { createAcpxEngineExecutor } from './execute.js';
+const fixture = fileURLToPath(new URL('../../../../scripts/mcp-fixtures/servers/acp-resource-agent.mjs',import.meta.url));
 const ctl = promisify(execFile);
 const enabled = process.platform === 'linux' && process.env.PAPERCLIP_TEST_SYSTEMD === '1';
 async function setup() {
@@ -24,8 +26,7 @@ async function setup() {
     nativeLoaderCommand: () => process.env.PAPERCLIP_TEST_RESOURCE_LOADER!, onEvidence: async (event: ExecutionResourceEvidence) => { evidence.push(event); } }, evidence,
     async close() { await ctl('systemctl', ['--user','stop',slice]); await ctl('systemctl', ['--user','revert',slice]); await fs.rm(root,{recursive:true,force:true}); } };
 }
-async function run(root: string, configEnv: Record<string,string> = {}, onSpawn = async (_meta: {pid:number}) => {}, rejectTerminalCleanup = false) {
-  const fixture = path.resolve('scripts/mcp-fixtures/servers/acp-resource-agent.mjs');
+async function run(root: string, configEnv: Record<string,string> = {}, onSpawn = async (_meta: {pid:number}) => {}, rejectTerminalCleanup = false, agentCommand?: string) {
   const logs: string[] = [];
   const result = await createAcpxEngineExecutor(rejectTerminalCleanup ? { createRuntime: options => createAcpRuntime({...options,spawnProcess:async(command,args,spawnOptions)=>{
     const worker=await options.spawnProcess!(command,args,spawnOptions);
@@ -35,7 +36,7 @@ async function run(root: string, configEnv: Record<string,string> = {}, onSpawn 
     }
     return worker;
   }}) } : {}) ({ runId: randomUUID(), agent: {id:'resource-agent',companyId:'resource-company'}, runtime: {}, context:{},
-    config: {agent:'custom',agentCommand:`${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`,mode:'oneshot',stateDir:root,cwd:process.cwd(),permissionMode:'approve-all',env:{RESOURCE_PROVIDER_SECRET:'exact-private-value',...configEnv}},
+    config: {agent:'custom',agentCommand:agentCommand ?? `${JSON.stringify(process.execPath)} ${JSON.stringify(fixture)}`,mode:'oneshot',stateDir:root,cwd:process.cwd(),permissionMode:'approve-all',env:{RESOURCE_PROVIDER_SECRET:'exact-private-value',...configEnv}},
     onLog: async (_stream: string, text: string) => { logs.push(text); }, onMeta: async () => {}, onSpawn } as never);
   return {result,logs};
 }
@@ -67,6 +68,45 @@ async function run(root: string, configEnv: Record<string,string> = {}, onSpawn 
       expect(test.resources.admission.snapshot).toEqual({active:0,usedBytes:0,queued:0});
     } finally { await test.close(); }
   }, 30_000);
+  it('contains Gemini version and Copilot help probes with exact environment', async()=>{
+    const test=await setup();
+    try {
+      for(const [name,args,probeArg] of [['gemini','--acp','--version'],['copilot','--acp --stdio','--help']]) {
+        const executable=path.join(test.root,name);
+        await fs.copyFile(fixture,executable);
+        await fs.chmod(executable,0o700);
+        const identityFile=path.join(test.root,name+'-probe.json');
+        const outcome=await withExecutionResourceContext(test.resources,()=>run(test.root,{RESOURCE_PROBE_IDENTITY_FILE:identityFile},undefined,false,`${JSON.stringify(executable)} ${args}`));
+        expect(outcome.result.exitCode,JSON.stringify(outcome)).toBe(0);
+        const probe=JSON.parse(await fs.readFile(identityFile,'utf8'));
+        expect(probe.secret).toBe('exact-private-value');
+        expect(probe.args).toEqual([probeArg]);
+        expect(probe.cgroup).toContain('.scope');
+        expect(probe.cgroup).not.toContain('paperclipai.service');
+        expect(test.evidence.map(event=>event.unit)).toContain(probe.cgroup.trim().split('/').at(-1));
+        expect(test.resources.admission.snapshot.active).toBe(0);
+      }
+    } finally { await test.close(); }
+  },30_000);
+  it('stops a timed-out help probe and its detached descendant before continuing',async()=>{
+    const test=await setup();
+    try {
+      const executable=path.join(test.root,'copilot');
+      await fs.copyFile(fixture,executable);
+      await fs.chmod(executable,0o700);
+      const identityFile=path.join(test.root,'timed-out-probe.json');
+      const outcome=await withExecutionResourceContext(test.resources,()=>run(test.root,{RESOURCE_PROBE_IDENTITY_FILE:identityFile,RESOURCE_FIXTURE_PROBE_HANG:'1'},undefined,false,`${JSON.stringify(executable)} --acp --stdio`));
+      expect(outcome.result.exitCode,JSON.stringify(outcome)).toBe(0);
+      const probe=JSON.parse(await fs.readFile(identityFile,'utf8'));
+      expect(probe.cgroup).toContain('.scope');
+      for(const pid of [probe.pid,probe.descendant]) {
+        const stat=await fs.readFile(`/proc/${pid}/stat`,'utf8').catch(()=>null);
+        expect(stat === null || stat.split(') ')[1]?.startsWith('Z')).toBe(true);
+      }
+      expect(test.evidence.some(event=>event.unit===probe.cgroup.trim().split('/').at(-1) && event.cancelled)).toBe(true);
+      expect(test.resources.admission.snapshot.active).toBe(0);
+    } finally { await test.close(); }
+  },30_000);
   it('completes immediate terminal commands and actual shell-string fallback', async()=>{
     const test=await setup();
     try {

@@ -2,6 +2,17 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFileSync, writeFileSync } from 'node:fs';
+if (process.argv.includes('--version') || process.argv.includes('--help')) {
+  const probe = {pid:process.pid,cgroup:readFileSync('/proc/self/cgroup','utf8'),secret:process.env.RESOURCE_PROVIDER_SECRET,args:process.argv.slice(2)};
+  if (process.env.RESOURCE_FIXTURE_PROBE_HANG === '1') probe.descendant = spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{detached:true,stdio:'ignore'}).pid;
+  if (process.env.RESOURCE_PROBE_IDENTITY_FILE) writeFileSync(process.env.RESOURCE_PROBE_IDENTITY_FILE, JSON.stringify(probe));
+  if (process.env.RESOURCE_FIXTURE_PROBE_HANG === '1') {
+    process.on('SIGTERM',()=>{});
+    await new Promise(()=>{});
+  }
+  process.stdout.write(process.argv.includes('--version') ? '0.40.0\n' : 'Usage: copilot --acp --stdio\n');
+  process.exit(0);
+}
 const pending = new Map();
 let nextId = 1000;
 const write = message => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n');

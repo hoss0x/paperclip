@@ -19,6 +19,58 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  		current: state.current,
  		quote: state.quote,
  		escaping: true,
+@@ -2751,13 +2751,13 @@
+ 	}
+ 	return 0;
+ }
+-async function detectGeminiVersion(command) {
+-	const versionLine = (await readCommandOutput(command, ["--version"], GEMINI_VERSION_TIMEOUT_MS))?.split(/\r?\n/).map((line) => line.trim()).find((line) => /\d+\.\d+\.\d+/.test(line));
++async function detectGeminiVersion(command, readOutput = readCommandOutput) {
++	const versionLine = (await readOutput(command, ["--version"], GEMINI_VERSION_TIMEOUT_MS))?.split(/\r?\n/).map((line) => line.trim()).find((line) => /\d+\.\d+\.\d+/.test(line));
+ 	return parseGeminiVersion(versionLine);
+ }
+-async function resolveGeminiCommandArgs(command, args) {
++async function resolveGeminiCommandArgs(command, args, readOutput) {
+ 	if (basenameToken(command) !== "gemini" || !args.includes("--acp")) return [...args];
+-	const version = await detectGeminiVersion(command);
++	const version = await detectGeminiVersion(command, readOutput);
+ 	if (version && compareVersionParts(version.parts, GEMINI_ACP_FLAG_VERSION) < 0) return args.map((arg) => arg === "--acp" ? "--experimental-acp" : arg);
+ 	return [...args];
+ }
+@@ -2803,9 +2803,9 @@
+ 		});
+ 	});
+ }
+-async function buildGeminiAcpStartupTimeoutMessage(command) {
++async function buildGeminiAcpStartupTimeoutMessage(command, readOutput) {
+ 	const parts = ["Gemini CLI ACP startup timed out before initialize completed.", "This usually means the local Gemini CLI is waiting on interactive OAuth or has incompatible ACP subprocess behavior."];
+-	const version = await detectGeminiVersion(command);
++	const version = await detectGeminiVersion(command, readOutput);
+ 	if (version) parts.push(`Detected Gemini CLI version: ${version.raw}.`);
+ 	if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) parts.push("No GEMINI_API_KEY or GOOGLE_API_KEY was set for non-interactive auth.");
+ 	parts.push("Try upgrading Gemini CLI and using API-key-based auth for non-interactive ACP runs.");
+@@ -2818,16 +2818,16 @@
+ 		"In harnessed or non-interactive runs, prefer --approve-all with nonInteractivePermissions=deny, upgrade Claude Code and the Claude ACP adapter, or use acpx claude exec as a one-shot fallback."
+ 	].join(" ");
+ }
+-async function buildCopilotAcpUnsupportedMessage(command) {
++async function buildCopilotAcpUnsupportedMessage(command, readOutput = readCommandOutput) {
+ 	const parts = ["GitHub Copilot CLI ACP stdio mode is not available in the installed copilot binary.", "acpx copilot expects a Copilot CLI release that supports --acp --stdio."];
+-	const helpOutput = await readCommandOutput(command, ["--help"], COPILOT_HELP_TIMEOUT_MS);
++	const helpOutput = await readOutput(command, ["--help"], COPILOT_HELP_TIMEOUT_MS);
+ 	if (typeof helpOutput === "string" && !helpOutput.includes("--acp")) parts.push("Detected copilot --help output without --acp support.");
+ 	parts.push("Upgrade GitHub Copilot CLI to a release with ACP stdio support, or use --agent with another ACP-compatible adapter in the meantime.");
+ 	return parts.join(" ");
+ }
+-async function ensureCopilotAcpSupport(command) {
+-	const helpOutput = await readCommandOutput(command, ["--help"], COPILOT_HELP_TIMEOUT_MS);
+-	if (typeof helpOutput === "string" && !helpOutput.includes("--acp")) throw new CopilotAcpUnsupportedError(await buildCopilotAcpUnsupportedMessage(command), { retryable: false });
++async function ensureCopilotAcpSupport(command, readOutput = readCommandOutput) {
++	const helpOutput = await readOutput(command, ["--help"], COPILOT_HELP_TIMEOUT_MS);
++	if (typeof helpOutput === "string" && !helpOutput.includes("--acp")) throw new CopilotAcpUnsupportedError(await buildCopilotAcpUnsupportedMessage(command, readOutput), { retryable: false });
+ }
+ function buildClaudeCodeOptionsMeta(options, isolateUserSettings = false) {
+ 	const claudeCodeOptions = {};
 @@ -2912,8 +2912,8 @@
  	}
  	return protectedKeys;
@@ -209,6 +261,15 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  			if (!this.options.verbose) return;
  			process.stderr.write(chunk);
  		});
+@@ -3984,7 +4028,7 @@
+ 		const resolvedBuiltInLaunch = resolveBuiltInAgentLaunch(this.options.agentCommand);
+ 		const spawnCommand = resolvedBuiltInLaunch?.command ?? configuredCommand.command;
+ 		let args = resolvedBuiltInLaunch?.args ?? configuredCommand.args;
+-		args = await resolveGeminiCommandArgs(spawnCommand, args);
++		args = await resolveGeminiCommandArgs(spawnCommand, args, this.readProbeOutput.bind(this));
+ 		if (isQoderAcpCommand(spawnCommand, args)) args = buildQoderAcpCommandArgs(args, this.options);
+ 		return {
+ 			spawnCommand,
 @@ -3994,7 +4038,7 @@
  			geminiAcp: isGeminiAcpCommand(spawnCommand, args),
  			copilotAcp: isCopilotAcpCommand(spawnCommand, args),
@@ -218,7 +279,52 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  		};
  	}
  	logAgentLaunch(plan) {
-@@ -4019,6 +4063,10 @@
+@@ -4009,8 +4053,43 @@
+ 		}
+ 		this.log(`spawning agent: ${plan.spawnCommand} ${plan.args.join(" ")}`);
+ 	}
++	async readProbeOutput(command, args, timeoutMs) {
++		if (!this.options.spawnProcess) return readCommandOutput(command, args, timeoutMs);
++		const options = buildAgentSpawnOptions(this.options.spawnCwd ?? this.options.cwd, this.options.authCredentials, this.options.sessionOptions?.env, this.options.inheritProcessEnv);
++		options.stdio = ["ignore", "pipe", "pipe"];
++		let managed;
++		let timedOut = false;
++		let escalation;
++		const stop = () => {
++			timedOut = true;
++			managed?.signal("SIGTERM");
++			if (managed) escalation ??= setTimeout(() => managed.signal("SIGKILL"), 1000);
++		};
++		const timer = setTimeout(stop, timeoutMs);
++		let bytes = 0;
++		const output = [];
++		const capture = chunk => {
++			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
++			const retained = buffer.subarray(0, Math.max(0, 65536 - bytes));
++			bytes += retained.length;
++			if (retained.length) output.push(retained);
++		};
++		try {
++			managed = await this.options.spawnProcess(command, args, options);
++			managed.child.stdout.on("data", capture);
++			managed.child.stderr.on("data", capture);
++			if (timedOut) stop();
++			await managed.completion;
++			return timedOut ? void 0 : Buffer.concat(output).toString("utf8");
++		} finally {
++			clearTimeout(timer);
++			clearTimeout(escalation);
++			managed?.child.stdout.off("data", capture);
++			managed?.child.stderr.off("data", capture);
++		}
++	}
+ 	async ensureLaunchSupport(plan) {
+-		if (plan.copilotAcp) await ensureCopilotAcpSupport(plan.spawnCommand);
++		if (plan.copilotAcp) await ensureCopilotAcpSupport(plan.spawnCommand, this.readProbeOutput.bind(this));
+ 		if (!plan.claudeAcp) return;
+ 		const claudeExe = resolveClaudeCodeExecutable(process.platform, plan.spawnOptions.env);
+ 		if (claudeExe) {
+@@ -4019,6 +4098,10 @@
  		}
  	}
  	async spawnAgentProcess(plan) {
@@ -229,7 +335,16 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  		const spawnedChild = spawn(plan.spawnCommand, plan.args, buildSpawnCommandOptions(plan.spawnCommand, plan.spawnOptions));
  		try {
  			await waitForSpawn$1(spawnedChild);
-@@ -4441,6 +4489,7 @@
+@@ -4096,7 +4179,7 @@
+ 		try {
+ 			params.child.kill();
+ 		} catch {}
+-		if (params.launch.geminiAcp && error instanceof TimeoutError) throw new GeminiAcpStartupTimeoutError(await buildGeminiAcpStartupTimeoutMessage(params.launch.spawnCommand), {
++		if (params.launch.geminiAcp && error instanceof TimeoutError) throw new GeminiAcpStartupTimeoutError(await buildGeminiAcpStartupTimeoutMessage(params.launch.spawnCommand, this.readProbeOutput.bind(this)), {
+ 			cause: error,
+ 			retryable: true
+ 		});
+@@ -4441,6 +4524,7 @@
  			this.log(`agent did not exit after ${AGENT_CLOSE_TERM_GRACE_MS}ms; forcing SIGKILL`);
  			exited = await this.killAgentIfRunning(child, exited, "SIGKILL", AGENT_CLOSE_KILL_GRACE_MS);
  		}
@@ -237,7 +352,7 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  		this.detachAgentHandles(child, !exited);
  	}
  	endAgentStdin(child) {
-@@ -4452,7 +4501,8 @@
+@@ -4452,7 +4536,8 @@
  	async killAgentIfRunning(child, alreadyExited, signal, waitMs) {
  		if (alreadyExited || !isChildProcessRunning(child)) return alreadyExited;
  		try {
@@ -247,7 +362,7 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  		} catch {}
  		return await waitForChildExit(child, waitMs);
  	}
-@@ -6070,6 +6120,27 @@
+@@ -6070,6 +6155,27 @@
  //#region src/runtime/engine/prompt-turn.ts
  const SESSION_REPLY_IDLE_MS = 1e3;
  const SESSION_REPLY_DRAIN_TIMEOUT_MS = 5e3;
@@ -275,7 +390,7 @@ diff --git a/dist/live-checkpoint-ClPCSdrW.js b/dist/live-checkpoint-ClPCSdrW.js
  async function runPromptTurn(params) {
  	try {
  		const promptPromise = params.client.prompt(params.sessionId, params.prompt);
-@@ -6079,6 +6150,20 @@
+@@ -6079,6 +6185,20 @@
  			idleMs: SESSION_REPLY_IDLE_MS,
  			timeoutMs: SESSION_REPLY_DRAIN_TIMEOUT_MS
  		}).catch(() => {});

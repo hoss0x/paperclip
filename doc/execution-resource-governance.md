@@ -227,9 +227,14 @@ settled from verified cleanup, so an already-exited child or rejected cleanup
 cannot lose its exit notification. Repeated `/bin/true`, actual shell-string
 fallback with output, and cleanup-rejection fixtures pass. ACPX 0.12
 creates an initial provider at ensureSession and a second at startTurn; both
-roots receive the same session envelope. Its internal version/help probes still
-need the launch hook before all older runtime paths are covered. A native driver
-qualification cannot prove containment of these separate paths. SSH/tar
+roots receive the same session envelope. Gemini version and Copilot help probes
+also use that launch hook, with the same sanitized provider environment and
+session budget. Their existing deadlines now signal the complete probe unit and
+wait for verified cleanup; retained output is capped at 64 KiB. Probes keep the
+original direct spawn when isolation is disabled. Focused fixtures verify probe
+cgroup membership, exact environment/arguments, and timeout cleanup of a detached
+descendant before later provider execution. A native driver qualification cannot
+prove containment of these separate paths. SSH/tar
 transport and workspace helper spawns also remain in the inventory; command
 strings executed inside an already-bounded worker must be distinguished from
 host-side controller spawns.
