@@ -1,4 +1,4 @@
-import { resolvePaperclipRunnerBinary } from "./native-runtime/native-codex-runner.js";
+import { resolvePaperclipRunnerBinary } from "./native-runtime/runner-binary.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { and, eq } from "drizzle-orm";

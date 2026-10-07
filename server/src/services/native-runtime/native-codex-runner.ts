@@ -1,8 +1,9 @@
+import { resolvePaperclipRunnerBinary } from "./runner-binary.js";
+export { resolvePaperclipRunnerBinary } from "./runner-binary.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, chmodSync, constants, mkdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { and, eq } from "drizzle-orm";
 
 import type { AdapterExecutionResult } from "@paperclipai/adapter-utils";
@@ -17,7 +18,6 @@ import {
 } from "../../vendor/paperclip-runner/index.js";
 import { runnerPrpCoordinator } from "./runner-prp-coordinator.js";
 
-const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const RUNNER_VERSION = "paperclip-runner-v1";
 
 interface NativeGoalControl {
@@ -162,39 +162,6 @@ export function buildNativeRunnerPreparePayload(
     completionContract: input.completionContract,
     authorizedTools: createPaperclipRunnerAuthorizedToolSet(input.semanticTools),
   };
-}
-
-function executableName(): string {
-  return process.platform === "win32" ? "paperclip-runnerd.exe" : "paperclip-runnerd";
-}
-
-export function resolvePaperclipRunnerBinary(
-  configuredPath = process.env.PAPERCLIP_RUNNER_BINARY,
-): string {
-  const candidates = [
-    configuredPath,
-    resolve(moduleDirectory, "../../vendor/paperclip-runner/bin", executableName()),
-    resolve(moduleDirectory, "../../../../packages/paperclip-runner/dist/bin", executableName()),
-    resolve(
-      moduleDirectory,
-      "../../../../packages/paperclip-runner/runner/target/release",
-      executableName(),
-    ),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  if (configuredPath && !isAbsolute(configuredPath)) {
-    throw new Error("PAPERCLIP_RUNNER_BINARY must be an absolute path");
-  }
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.R_OK | (process.platform === "win32" ? 0 : constants.X_OK));
-      return candidate;
-    } catch {
-      // Continue through the fixed production and workspace locations.
-    }
-  }
-  throw new Error(
-    "paperclip_runner_binary_missing: build @paperclipai/paperclip-runner or set PAPERCLIP_RUNNER_BINARY",
-  );
 }
 
 export function buildNativeRunnerArguments(input: {

@@ -161,7 +161,7 @@ import {
 } from "./status-arbiter.js";
 import { HttpError } from "../../errors.js";
 import { redactSensitiveText } from "../../redaction.js";
-import { resolvePaperclipRunnerBinary } from "./native-codex-runner.js";
+import { resolvePaperclipRunnerBinary } from "./runner-binary.js";
 import {
   createNativeRunTrace,
   isNativeRunRootHistoricalSpan,

@@ -248,10 +248,10 @@ provide an OS memory boundary.
 | Path | Execution location and remaining gap |
 | --- | --- |
 | `adapter-utils/src/ssh.ts` | Buffered SSH commands and Git bundle/fetch/merge helpers now use the shared buffered scope runner when a resource context is present. Paired tar/SSH and file-stream roots now use one run envelope when a resource context is present, so one partner cannot queue behind the other. Backpressure and authentication cleanup remain intact; completion waits for drained output and verified scope cleanup. Preparation/restoration context coverage remains to be qualified. |
-| `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction now uses the shared buffered scope runner when a resource context is present, including durable workspace seeds, with a finite 120-second deadline and whole-tree cleanup. Context coverage outside adapter dispatch remains to be qualified. |
+| `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction now uses the shared buffered scope runner when a resource context is present, including durable workspace seeds, with a finite 120-second deadline and whole-tree cleanup. Server preparation/restoration and deferred callbacks install operator policy through the shared host target wrapper; direct non-server callers still require a resource context. |
 | `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler now uses a cgroup scope through the shared launcher. UI/API scans install an operator resource context even outside agent dispatch; admission waits count toward the scan deadline. Run-owned scans retain the controller run id for recorded-unit cancellation. Existing scheduler/output/backpressure and Git locking rules remain in place. |
-| `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Shared metadata/bundle helpers now use buffered scopes when a resource context is present. Server workspace Git calls install the operator context, including calls outside dispatch. Shared helpers invoked during other preparation/restoration still need context coverage. Mandatory writer locks and caller Git environment settings remain unchanged. |
-| `server/services/agent-directory-working-copies.ts` | SSH instruction staging/restoration can run outside the current adapter dispatch resource context. Containing only adapter execution will not cover these calls. |
+| `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Shared metadata/bundle helpers now use buffered scopes when a resource context is present. Server workspace Git calls install the operator context, including calls outside dispatch. Server instruction/checkpoint/native workspace preparation and deferred restoration install the operator context. Mandatory writer locks and caller Git environment settings remain unchanged. |
+| `server/services/agent-directory-working-copies.ts` | SSH instruction staging/restoration now installs operator policy independently of dispatch. The shared server target wrapper also covers legacy instruction copies, file-checkpoint transport, and native workspace preparation, including callbacks invoked later outside the original context. |
 | `server/services/native-runtime/native-codex-runner.ts` (`executeNativeCodexRunner`) | An exported older runner entry point still launches directly. Source search found no production caller, only tests; retain this as an explicit compatibility gap until it is governed or removed with evidence. The binary resolver in this module is used in production. |
 
 Generated process-session commands in `execution-target.ts`, the GitHub launcher,
@@ -295,6 +295,19 @@ its remote-side resource policy; a local SSH cgroup does not govern a remote
 machine. Tests cover one-slot paired streams, delayed subscription to immediate
 exit, deadline descendants, failed partners, queued admission, shared OOM and
 recovery, and real tar streams through a local SSH executable fixture.
+
+Controller staging uses `server/services/host-execution-target.ts` for both
+preparation and later restore/snapshot-cleanup callbacks. Every invocation
+reuses an active run context or installs operator policy with the original run
+identity. The local instruction Git-exclude program also uses the buffered
+scope runner. A lightweight `native-runtime/runner-binary.ts` resolver avoids
+loading the native execution and authorized-tool graph for a helper; its old
+export remains available. Focused real tests use a mocked target transport that
+launches actual scoped commands, including deferred restore OOM and recovery.
+They prove the wrapper boundary; separate instruction/checkpoint/native workspace
+regressions cover the actual service call sites. Remote platform probes in the
+adapter registry, provider installation probes, and the older exported native
+runner still need final inventory/qualification before a complete coverage claim.
 
 A bounded compiler diagnostic excluded 258 colocated server test roots without
 changing the repository configuration. It still approached the existing 2.2 GiB

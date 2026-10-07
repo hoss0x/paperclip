@@ -3,20 +3,20 @@ import path from "node:path";
 import { currentExecutionResources, withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
 import { resolveExecutionResourcePolicy } from "@paperclipai/adapter-utils/execution-resource-policy";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
-import { resolvePaperclipRunnerBinary } from "./native-runtime/native-codex-runner.js";
+import { resolvePaperclipRunnerBinary } from "./native-runtime/runner-binary.js";
 import { logger } from "../middleware/logger.js";
 
 /** Controller helpers share operator admission with agents, including UI/API
  * requests outside run dispatch. Never resolve policy from command environment.
  */
-export async function withHostExecutionResources<T>(signal: AbortSignal | undefined, execute: () => Promise<T>): Promise<T> {
+export async function withHostExecutionResources<T>(signal: AbortSignal | undefined, execute: () => Promise<T>, runId?: string): Promise<T> {
   if (currentExecutionResources() || resolveExecutionResourcePolicy().isolation === "none") return execute();
   const root = path.join(resolvePaperclipInstanceRoot(), "runtime", "execution-helpers");
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const scratchDir = await fs.mkdtemp(path.join(root, "helper-"));
   const pending = new Set<string>();
   try {
-    return await withOperatorExecutionResources({ scratchDir, signal,
+    return await withOperatorExecutionResources({ scratchDir, signal, runId,
       nativeLoaderCommand: resolvePaperclipRunnerBinary,
       onUnitPrepared: async ({ unit }) => { pending.add(unit); },
       onEvidence: async evidence => {
