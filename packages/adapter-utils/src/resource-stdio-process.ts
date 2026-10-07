@@ -12,13 +12,34 @@ export interface ResourceStdioProcess {
   signal: (signal: NodeJS.Signals) => void;
 }
 
-export async function launchResourceStdioProcess(input: {
+interface StdioLaunchInput {
   runId: string; command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal;
   scope?: boolean;
   nativeLoaderCommand?: string;
   extraStdio?: Array<"pipe" | "ignore" | number>;
   detached?: boolean;
-}): Promise<ResourceStdioProcess> {
+}
+
+export interface PreparedResourceScopeProcess {
+  /** Descriptor leases remain open until this synchronous spawn returns. */
+  spawn(input: Pick<StdioLaunchInput, "command" | "args" | "cwd" | "env" | "extraStdio" | "detached">): ResourceStdioProcess & { ready: Promise<void> };
+  close(): Promise<void>;
+}
+
+export async function launchResourceStdioProcess(input: StdioLaunchInput): Promise<ResourceStdioProcess> {
+  const prepared = await reserveStdioProcess(input);
+  try { const worker = prepared.spawn(input); await worker.ready; return worker; }
+  catch (error) { await prepared.close(); throw error; }
+}
+
+/** Admit before a verified synchronous launcher duplicates its descriptors. */
+export async function prepareResourceScopeProcess(input: {
+  runId: string; cwd: string; nativeLoaderCommand: string; signal?: AbortSignal;
+}): Promise<PreparedResourceScopeProcess> {
+  return reserveStdioProcess({ ...input, scope: true, command: "/bin/false", args: [], env: {} });
+}
+
+async function reserveStdioProcess(input: StdioLaunchInput): Promise<PreparedResourceScopeProcess> {
   const resources = currentExecutionResources();
   if (!resources || resources.policy.isolation !== "systemd") throw new Error("Stdio isolation requires a resource context");
   const cancellationSignal = input.signal && resources.signal ? AbortSignal.any([input.signal, resources.signal]) : input.signal ?? resources.signal;
@@ -35,18 +56,53 @@ export async function launchResourceStdioProcess(input: {
     throw error;
   }
   const owned = boundary;
+  let worker: (ResourceStdioProcess & { ready: Promise<void> }) | undefined;
+  let consumed = false;
+  let closed: Promise<void> | undefined;
+  const close = () => closed ??= (async () => {
+    consumed = true;
+    cancellationSignal?.removeEventListener("abort", cancelPrepared);
+    if (worker) {
+      worker.signal("SIGTERM");
+      const escalation = setTimeout(() => worker!.signal("SIGKILL"), 1_000);
+      try { await worker.completion; } finally { clearTimeout(escalation); }
+    } else {
+      const evidence = await owned.finish(cancellationSignal?.aborted ?? false);
+      release();
+      await resources.onEvidence?.(evidence);
+    }
+  })();
+  const cancelPrepared = () => { void close().catch(() => {}); };
+  cancellationSignal?.addEventListener("abort", cancelPrepared, { once: true });
+  if (cancellationSignal?.aborted) cancelPrepared();
+  return {
+    close,
+    spawn: launch => {
+      if (consumed || cancellationSignal?.aborted) throw new Error("Prepared execution scope is closed or cancelled");
+      consumed = true;
+      cancellationSignal?.removeEventListener("abort", cancelPrepared);
+      try {
+        if (input.scope) owned.configureScope({ ...launch, env: applyLowMemoryEnvironment(launch.env, resources.policy) });
+        worker = spawnStdioProcess({ ...input, ...launch }, owned, resources, release, cancellationSignal);
+        return worker;
+      } catch (error) {
+        void close().catch(() => {});
+        throw error;
+      }
+    },
+  };
+}
+
+function spawnStdioProcess(input: StdioLaunchInput,
+  owned: Awaited<ReturnType<typeof prepareSystemdExecution>>,
+  resources: NonNullable<ReturnType<typeof currentExecutionResources>>,
+  release: () => void, cancellationSignal?: AbortSignal,
+): ResourceStdioProcess & { ready: Promise<void> } {
   // The systemd client needs the operator's user-manager connection variables.
   // Only the private invocation file supplies the provider's exact environment.
-  let child: ChildProcessWithoutNullStreams;
-  try {
-    if (input.extraStdio?.length && !input.scope) throw new Error("Inherited execution descriptors require a systemd scope");
-    child = spawn(owned.command, owned.args, { cwd: input.cwd, env: process.env,
-      stdio: ["pipe", "pipe", "pipe", ...(input.extraStdio ?? [])], detached: input.detached ?? false }) as ChildProcessWithoutNullStreams;
-  } catch (error) {
-    await owned.finish();
-    release();
-    throw error;
-  }
+  if (input.extraStdio?.length && !input.scope) throw new Error("Inherited execution descriptors require a systemd scope");
+  const child = spawn(owned.command, owned.args, { cwd: input.cwd, env: process.env,
+    stdio: ["pipe", "pipe", "pipe", ...(input.extraStdio ?? [])], detached: input.detached ?? false }) as ChildProcessWithoutNullStreams;
   let cancelled = false;
   let escalation: NodeJS.Timeout | undefined;
   const signal = (requested: NodeJS.Signals) => {
@@ -94,15 +150,18 @@ export async function launchResourceStdioProcess(input: {
   // Attach before returning/awaiting identity; short-lived failures cannot leak
   // an unhandled rejection while a protocol constructor is being prepared.
   void completion.catch(() => {});
-  try {
-    const identity = await Promise.race([owned.identity(), completion.then(() => {
-      throw new Error("Execution stopped before its protocol transport started");
-    })]);
+  const ready = Promise.race([owned.identity(), completion.then(() => {
+    throw new Error("Execution stopped before its protocol transport started");
+  })]).then(identity => {
+    if (input.scope && identity.pid !== child.pid) throw new Error("Scope worker PID changed during handoff");
+    worker.pid = identity.pid;
     if (cancellationSignal?.aborted) abort();
-    return { child, pid: identity.pid, completion, signal };
-  } catch (error) {
+  }).catch(async error => {
     signal("SIGKILL");
     await completion.catch(() => {});
     throw error;
-  }
+  });
+  void ready.catch(() => {});
+  const worker = { child, pid: child.pid ?? 0, completion, signal, ready };
+  return worker;
 }

@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withExecutionResourceContext } from "./execution-resource-context.js";
 import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "./execution-resource-policy.js";
-import { launchResourceStdioProcess } from "./resource-stdio-process.js";
+import { launchResourceStdioProcess, prepareResourceScopeProcess } from "./resource-stdio-process.js";
 import { listActiveExecutionUnits } from "./execution-resource-reconciliation.js";
 import type { ExecutionResourceEvidence } from "./systemd-execution.js";
 
@@ -26,6 +26,51 @@ function context() {
     });
     expect(resources.admission.snapshot).toEqual({ active: 0, usedBytes: 0, queued: 0 });
   });
+  it("admits before synchronous pipe/descriptor inheritance and owns an unused reservation", async () => {
+    const resources = context();
+    const nativeLoaderCommand = process.env.PAPERCLIP_TEST_RESOURCE_LOADER!;
+    await withExecutionResourceContext(resources, async () => {
+      const prepared = await prepareResourceScopeProcess({ runId: randomUUID(), cwd: process.cwd(), nativeLoaderCommand });
+      expect(resources.admission.snapshot.active).toBe(1);
+      await prepared.close();
+      expect(resources.admission.snapshot.active).toBe(0);
+      expect(() => prepared.spawn({ command: process.execPath, args: [], cwd: process.cwd(), env: {} })).toThrow("closed or cancelled");
+      const file = path.join(resources.scratchDir, `prepared-descriptor-${randomUUID()}`);
+      await fs.writeFile(file, "retained directory identity");
+      const descriptor = await fs.open(file, "r");
+      const ticket = await prepareResourceScopeProcess({ runId: randomUUID(), cwd: process.cwd(), nativeLoaderCommand });
+      const worker = ticket.spawn({ command: process.execPath,
+        args: ["-e", "const fs=require('node:fs');console.log(JSON.stringify({pid:process.pid,source:fs.readFileSync(3,'utf8'),identity:fs.readFileSync(4,'utf8')}));setInterval(()=>{},1000)"],
+        cwd: process.cwd(), env: { PATH: process.env.PATH }, extraStdio: ["pipe", descriptor.fd], detached: true });
+      let output = ""; worker.child.stdout.on("data", chunk => { output += String(chunk); });
+      worker.child.stderr.resume();
+      // The caller can release its lease as soon as the synchronous spawn returns.
+      await descriptor.close();
+      const source = worker.child.stdio[3] as import("node:stream").Writable;
+      source.on("error", () => {});
+      source.end("verified source bytes");
+      try {
+        await worker.ready;
+        await expect.poll(() => output.includes("\n")).toBe(true);
+        expect(JSON.parse(output.trim())).toEqual({ pid: worker.pid, source: "verified source bytes", identity: "retained directory identity" });
+        expect(() => ticket.spawn({ command: process.execPath, args: [], cwd: process.cwd(), env: {} })).toThrow("closed or cancelled");
+      } finally { await ticket.close(); await fs.rm(file, { force: true }); }
+      expect(resources.admission.snapshot.active).toBe(0);
+    });
+  }, 20_000);
+
+  it("cancels a prepared scope before its synchronous launch", async () => {
+    const resources = context();
+    const abort = new AbortController();
+    await withExecutionResourceContext(resources, async () => {
+      const ticket = await prepareResourceScopeProcess({ runId: randomUUID(), cwd: process.cwd(),
+        nativeLoaderCommand: process.env.PAPERCLIP_TEST_RESOURCE_LOADER!, signal: abort.signal });
+      abort.abort(); await ticket.close();
+      expect(() => ticket.spawn({ command: process.execPath, args: [], cwd: process.cwd(), env: {} })).toThrow("closed or cancelled");
+      expect(resources.admission.snapshot.active).toBe(0);
+    });
+  });
+
   it("keeps worker/group identity, inherited descriptors and detached-descendant cleanup", async () => {
     const resources = context();
     const file = path.join(resources.scratchDir, `descriptor-${randomUUID()}`);

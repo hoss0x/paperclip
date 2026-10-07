@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, writeFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { ExecutionResourcePolicy } from "./execution-resource-policy.js";
@@ -50,6 +50,7 @@ export interface SystemdExecutionBoundary {
   sample: () => Promise<void>;
   identity: () => Promise<{ pid: number; unit: string }>;
   signal: (signal: NodeJS.Signals) => Promise<void>;
+  configureScope: (input: { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }) => void;
   finish: (cancelled?: boolean) => Promise<ExecutionResourceEvidence>;
 }
 
@@ -96,6 +97,7 @@ export async function prepareSystemdExecution(input: {
   };
   let cgroup: string | null = null;
   let finished = false;
+  let configured = false;
   async function readProperties() {
     const { stdout } = await execFileAsync("systemctl", ["--user", "show", unit,
       "--property=ControlGroup,Result,ExecMainCode,ExecMainStatus,ExecMainPID"], { timeout: 5_000 });
@@ -145,6 +147,12 @@ export async function prepareSystemdExecution(input: {
         ? [input.nativeLoaderCommand!, "--resource-exec", invocationFile]
         : [process.execPath, "--input-type=commonjs", "-e", ENVIRONMENT_LOADER, invocationFile])],
     unit, sample,
+    configureScope: invocation => {
+      if (!input.scope || finished || configured) throw new Error("Only an unstarted scope can be configured");
+      configured = true;
+      const env = Object.fromEntries(Object.entries(invocation.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+      writeFileSync(invocationFile, JSON.stringify({ command: invocation.command, args: invocation.args, cwd: invocation.cwd, env, identityFile }), { mode: 0o600 });
+    },
     identity: async () => {
       const deadline = Date.now() + 5_000;
       do {

@@ -58,6 +58,15 @@ closes descriptors beyond stdin/stdout/stderr, so the service loader cannot
 preserve verified executable and credential-fence descriptors. OpenCode uses this scope primitive without replacing its executable descriptor
 with a mutable pathname. ACPX driver wiring is still pending.
 Startup accounting and durable ownership recognize both services and scopes.
+`prepareResourceScopeProcess` can reserve capacity and persist unit ownership
+before a verified launcher duplicates descriptors. Its single-use synchronous
+spawn returns a stable child PID, inherited pipes/descriptors, a readiness promise
+and the same tracked completion path as the async transports. Closing or cancelling
+an unused preparation releases its reservation only after cleanup. This seam is
+validated but not yet connected to ACPX. ACPX has persistent and transient command
+roots within one runtime; those roots need one run envelope, rather than competing
+for separate full-budget slots. Per-command admission with one slot could block
+status/control requests behind the runtime they must control.
 Scope mode requires the packaged runner; it never falls back to an unbounded
 launch. Scope OOM evidence comes from cgroup events and the systemd result;
 `OOMPolicy=stop` applies to services only.
