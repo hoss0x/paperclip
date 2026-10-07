@@ -247,10 +247,10 @@ provide an OS memory boundary.
 
 | Path | Execution location and remaining gap |
 | --- | --- |
-| `adapter-utils/src/ssh.ts` | Host SSH clients and paired tar/SSH streams use direct child processes. Git bundle/fetch/merge helpers use direct `execFile`. Transfer pairs must share one reservation so one partner cannot queue behind the other. Preserve backpressure, authentication cleanup, cancellation and restoration ordering. |
-| `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction uses direct `execFile`, including durable workspace seeds. It also needs a finite execution deadline and whole-tree cleanup. |
+| `adapter-utils/src/ssh.ts` | Buffered SSH commands and Git bundle/fetch/merge helpers now use the shared buffered scope runner when a resource context is present. Paired tar/SSH streams still use direct child processes; transfer pairs must share one reservation so one partner cannot queue behind the other. Preserve backpressure, authentication cleanup, cancellation and restoration ordering. |
+| `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction now uses the shared buffered scope runner when a resource context is present, including durable workspace seeds, with a finite 120-second deadline and whole-tree cleanup. Context coverage outside adapter dispatch remains to be qualified. |
 | `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler now uses a cgroup scope through the shared launcher. UI/API scans install an operator resource context even outside agent dispatch; admission waits count toward the scan deadline. Run-owned scans retain the controller run id for recorded-unit cancellation. Existing scheduler/output/backpressure and Git locking rules remain in place. |
-| `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Metadata helpers remain direct launches; scheduled expensive scans do not cover every Git command. Review hook/filter execution and large repository operations before treating these as small helpers. |
+| `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Shared metadata/bundle helpers now use buffered scopes when a resource context is present. Server workspace Git calls install the operator context, including calls outside dispatch. Shared helpers invoked during other preparation/restoration still need context coverage. Mandatory writer locks and caller Git environment settings remain unchanged. |
 | `server/services/agent-directory-working-copies.ts` | SSH instruction staging/restoration can run outside the current adapter dispatch resource context. Containing only adapter execution will not cover these calls. |
 | `server/services/native-runtime/native-codex-runner.ts` (`executeNativeCodexRunner`) | An exported older runner entry point still launches directly. Source search found no production caller, only tests; retain this as an explicit compatibility gap until it is governed or removed with evidence. The binary resolver in this module is used in production. |
 
@@ -274,6 +274,16 @@ operator configuration with one execution slot. Host helpers retain their
 private launch files when unit cleanup fails and log memory-limit evidence once
 per failed helper. Other direct Git, SSH and archive helpers in the table still
 require integration.
+
+Buffered commands retain exact arguments, environment and optional stdin. Their
+limits cover admission waits, buffered bytes and complete descendant cleanup;
+memory kills remain distinct from ordinary exits, timeouts and cancellation.
+Missing executables retain ENOENT/EACCES compatibility, and nonzero exits retain
+stdout/stderr diagnostics. SSH text helpers keep their existing limits; archive
+commands now have a two-minute deadline. Server workspace metadata Git commands
+keep Node's former 1 MiB output budget and gain a two-minute deadline. Tests cover
+real Git metadata/tar creation call sites and an SSH executable fixture handoff,
+alongside timeout descendants, output overflow, memory failure and recovery.
 
 A bounded compiler diagnostic excluded 258 colocated server test roots without
 changing the repository configuration. It still approached the existing 2.2 GiB

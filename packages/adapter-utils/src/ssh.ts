@@ -1,3 +1,5 @@
+import { execFileWithResources } from "./resource-buffered-command.js";
+import { currentExecutionResources } from "./execution-resource-context.js";
 import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { constants as fsConstants, createReadStream, createWriteStream, promises as fs } from "node:fs";
@@ -197,26 +199,7 @@ async function execFileText(
     maxBuffer?: number;
   } = {},
 ): Promise<SshCommandResult> {
-  return await new Promise<SshCommandResult>((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        timeout: options.timeout ?? 15_000,
-        maxBuffer: options.maxBuffer ?? 1024 * 128,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(Object.assign(error, { stdout: stdout ?? "", stderr: stderr ?? "" }));
-          return;
-        }
-        resolve({
-          stdout: stdout ?? "",
-          stderr: stderr ?? "",
-        });
-      },
-    );
-  });
+  return execFileWithResources(file, args, options);
 }
 
 async function spawnText(
@@ -228,6 +211,9 @@ async function spawnText(
     maxBuffer?: number;
   } = {},
 ): Promise<SshCommandResult> {
+  if (currentExecutionResources()?.policy.isolation === "systemd") {
+    return execFileWithResources(file, args, options);
+  }
   return await new Promise<SshCommandResult>((resolve, reject) => {
     const child = spawn(file, args, {
       stdio: [options.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
