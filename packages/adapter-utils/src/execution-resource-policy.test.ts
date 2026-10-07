@@ -43,9 +43,15 @@ describe("operator execution resource policy", () => {
   it("adds conservative defaults without changing explicit tool settings or secrets", () => {
     const env = { CARGO_BUILD_JOBS: "2", API_TOKEN: "private", NODE_OPTIONS: "--enable-source-maps" };
     expect(applyLowMemoryEnvironment(env, resolveExecutionResourcePolicy({}, "linux", 8 * GiB)))
-      .toEqual({ ...env, CMAKE_BUILD_PARALLEL_LEVEL: "1", RAYON_NUM_THREADS: "1", npm_config_workspace_concurrency: "1" });
+      .toEqual({ ...env, CMAKE_BUILD_PARALLEL_LEVEL: "1", RAYON_NUM_THREADS: "1", npm_config_workspace_concurrency: "1", GOMAXPROCS: "1", GOMEMLIMIT: "1536MiB" });
     expect(env).not.toHaveProperty("RAYON_NUM_THREADS");
   });
+  it("preserves explicit Go memory and concurrency controls", () => {
+    const env = { GOMAXPROCS: "2", GOMEMLIMIT: "768MiB" };
+    expect(applyLowMemoryEnvironment(env, resolveExecutionResourcePolicy({}, "linux", 8 * GiB)))
+      .toMatchObject(env);
+  });
+
 });
 
 describe("aggregate execution admission", () => {

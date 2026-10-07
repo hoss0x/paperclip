@@ -55,7 +55,12 @@ surviving units after controller restart. Multiple controllers need a shared OS
 aggregate envelope; a process-local queue alone cannot bound them.
 
 The low-memory environment supplies supported defaults for `CARGO_BUILD_JOBS`,
-`CMAKE_BUILD_PARALLEL_LEVEL`, `RAYON_NUM_THREADS`, and pnpm workspace concurrency.
+`CMAKE_BUILD_PARALLEL_LEVEL`, `RAYON_NUM_THREADS`, Go runtime concurrency, and pnpm
+workspace concurrency. `GOMEMLIMIT` defaults to the configured memory-high
+threshold. It is a soft per-runtime GC target, not an RSS or process-tree limit;
+see the [Go GC guide](https://go.dev/doc/gc-guide#Memory_limit). The pinned
+TypeScript 7 `tsc` launcher executes a native compiler, so Node heap options do
+not govern its memory. Go settings apply generically to Go programs.
 Explicit tool settings survive. TypeScript has no universal safe concurrency
 environment switch. Vitest validation uses `--maxWorkers=1 --no-file-parallelism`.
 The OS hard limit remains the enforcement boundary.

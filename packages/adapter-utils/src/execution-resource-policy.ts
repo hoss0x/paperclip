@@ -69,6 +69,8 @@ export function applyLowMemoryEnvironment(env: NodeJS.ProcessEnv, policy: Execut
     CARGO_BUILD_JOBS: jobs,
     CMAKE_BUILD_PARALLEL_LEVEL: jobs,
     RAYON_NUM_THREADS: jobs,
+    GOMAXPROCS: jobs,
+    GOMEMLIMIT: `${Math.floor(policy.memoryHighBytes / MiB)}MiB`,
     npm_config_workspace_concurrency: jobs,
     ...env,
   };
