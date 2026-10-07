@@ -63,10 +63,14 @@ export async function prepareSystemdExecution(input: {
   policy: ExecutionResourcePolicy;
   scratchDir: string;
   slice?: string;
+  /** Scope mode retains inherited descriptor identities for verified launchers. */
+  scope?: boolean;
+  nativeLoaderCommand?: string;
 }): Promise<SystemdExecutionBoundary> {
   if (process.platform !== "linux" || typeof process.execve !== "function") {
     throw new Error("systemd execution requires Linux and Node.js execve support");
   }
+  if (input.scope && !input.nativeLoaderCommand) throw new Error("Descriptor-preserving scopes require the packaged native runner");
   // An absent user manager or cgroup v2 is a configuration error, not permission
   // to run unbounded. Probe before persisting secret-bearing invocation data.
   await fs.access("/sys/fs/cgroup/cgroup.controllers");
@@ -83,7 +87,7 @@ export async function prepareSystemdExecution(input: {
     await fs.rm(directory, { recursive: true, force: true });
     throw error;
   }
-  const unit = `paperclip-execution-${input.runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-${randomUUID()}.service`;
+  const unit = `paperclip-execution-${input.runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-${randomUUID()}.${input.scope ? "scope" : "service"}`;
   const policy = input.policy;
   const evidence: ExecutionResourceEvidence = {
     unit, memoryMaxBytes: policy.memoryMaxBytes, memoryHighBytes: policy.memoryHighBytes,
@@ -127,8 +131,8 @@ export async function prepareSystemdExecution(input: {
   };
   return {
     command: "systemd-run",
-    args: ["--user", "--pipe", "--wait", "--quiet", "--service-type=exec", "--expand-environment=no",
-      `--unit=${unit}`, `--working-directory=${input.cwd}`,
+    args: ["--user", ...(input.scope ? ["--scope"] : ["--pipe", "--wait", "--service-type=exec", "--expand-environment=no"]), "--quiet",
+      `--unit=${unit}`, ...(input.scope ? [] : [`--working-directory=${input.cwd}`]),
       ...(input.slice ? [`--slice=${input.slice}`] : []),
       `--property=MemoryHigh=${policy.memoryHighBytes}`,
       `--property=MemoryMax=${policy.memoryMaxBytes}`,
@@ -136,8 +140,10 @@ export async function prepareSystemdExecution(input: {
       `--property=CPUQuota=${policy.cpuQuotaPercent}%`,
       `--property=TasksMax=${policy.tasksMax}`,
       "--property=MemoryAccounting=yes", "--property=CPUAccounting=yes",
-      "--property=KillMode=control-group", "--property=OOMPolicy=stop",
-      "--property=TimeoutStopSec=5s", "--", process.execPath, "--input-type=commonjs", "-e", ENVIRONMENT_LOADER, invocationFile],
+      "--property=KillMode=control-group", ...(input.scope ? [] : ["--property=OOMPolicy=stop"]),
+      "--property=TimeoutStopSec=5s", "--", ...(input.scope
+        ? [input.nativeLoaderCommand!, "--resource-exec", invocationFile]
+        : [process.execPath, "--input-type=commonjs", "-e", ENVIRONMENT_LOADER, invocationFile])],
     unit, sample,
     identity: async () => {
       const deadline = Date.now() + 5_000;

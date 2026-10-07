@@ -42,6 +42,20 @@ receives its exact private invocation environment. Startup cancellation reaches
 admission before a process can launch. Existing runnerd/remote factory input
 contracts stay unchanged. Direct OpenCode/ACPX launches remain unfinished.
 
+Descriptor-preserving launches can instead use a transient systemd scope.
+`systemd-run --scope` retains the worker PID, process group and inherited file
+descriptors. The packaged native runner's private `--resource-exec` handoff reads
+and removes the same private invocation file, writes worker identity, and replaces
+itself through Unix `exec`. It leaves no additional supervisor. Node's
+[`process.execve`](https://nodejs.org/api/process.html#processexecvefile-args-env)
+closes descriptors beyond stdin/stdout/stderr, so the service loader cannot
+preserve verified executable and credential-fence descriptors. Scope support is
+currently a tested shared primitive; OpenCode/ACPX driver wiring is still pending.
+Startup accounting and durable ownership recognize both services and scopes.
+Scope mode requires the packaged runner; it never falls back to an unbounded
+launch. Scope OOM evidence comes from cgroup events and the systemd result;
+`OOMPolicy=stop` applies to services only.
+
 The boundary sets `MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `CPUQuota`,
 `TasksMax`, `KillMode=control-group` and `OOMPolicy=stop`. An explicitly requested
 boundary fails if Linux cgroup v2 or the user systemd manager is unavailable.
@@ -128,6 +142,12 @@ Opt-in systemd integration tests cover actual cgroup membership, stdin, exact
 environment/argument preservation, detached-descendant cancellation, cgroup OOM,
 and a successful execution after failure. Set `PAPERCLIP_TEST_SYSTEMD=1` and
 `PAPERCLIP_SCRATCH_DIR` to a run-owned scratch directory to run these tests.
+Scope tests additionally require `PAPERCLIP_TEST_RESOURCE_LOADER` pointing to the
+rebuilt native `paperclip-runnerd` binary. Server transport fixtures additionally
+select `PAPERCLIP_EXECUTION_ISOLATION=systemd`, 128 MiB memory high/max/capacity,
+and one concurrent slot. Equal high/max thresholds make the intentional hard-limit
+fixture immediate; a 96 MiB high/128 MiB max run crossed its 20-second test deadline.
+Qualification of sustained soft-threshold pressure remains pending.
 Run heavy validation inside a bounded sibling unit, never inside the live service.
 
 Server dispatch records per-unit limits and terminal evidence in the local run

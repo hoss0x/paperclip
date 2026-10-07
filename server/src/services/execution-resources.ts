@@ -68,7 +68,7 @@ export async function stopRecordedLegacyExecutionUnits(db: Db, run: { id: string
   ));
   const prefix = `paperclip-execution-${run.id.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-`;
   const units = new Set(rows.map(row => row.payload?.unit).filter((unit): unit is string =>
-    typeof unit === "string" && unit.startsWith(prefix) && /^paperclip-execution-[a-zA-Z0-9-]+\.service$/.test(unit)));
+    typeof unit === "string" && unit.startsWith(prefix) && /^paperclip-execution-[a-zA-Z0-9-]+\.(?:service|scope)$/.test(unit)));
   for (const unit of units) {
     const stdout = await systemctl(["show", unit, "--property=LoadState", "--value"], 5_000);
     if (stdout.trim() === "not-found") continue;

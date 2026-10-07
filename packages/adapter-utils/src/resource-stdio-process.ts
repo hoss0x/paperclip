@@ -14,6 +14,10 @@ export interface ResourceStdioProcess {
 
 export async function launchResourceStdioProcess(input: {
   runId: string; command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; signal?: AbortSignal;
+  scope?: boolean;
+  nativeLoaderCommand?: string;
+  extraStdio?: Array<"pipe" | "ignore" | number>;
+  detached?: boolean;
 }): Promise<ResourceStdioProcess> {
   const resources = currentExecutionResources();
   if (!resources || resources.policy.isolation !== "systemd") throw new Error("Stdio isolation requires a resource context");
@@ -35,7 +39,9 @@ export async function launchResourceStdioProcess(input: {
   // Only the private invocation file supplies the provider's exact environment.
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawn(owned.command, owned.args, { cwd: input.cwd, env: process.env, stdio: "pipe", detached: false });
+    if (input.extraStdio?.length && !input.scope) throw new Error("Inherited execution descriptors require a systemd scope");
+    child = spawn(owned.command, owned.args, { cwd: input.cwd, env: process.env,
+      stdio: ["pipe", "pipe", "pipe", ...(input.extraStdio ?? [])], detached: input.detached ?? false }) as ChildProcessWithoutNullStreams;
   } catch (error) {
     await owned.finish();
     release();
@@ -54,12 +60,20 @@ export async function launchResourceStdioProcess(input: {
   cancellationSignal?.addEventListener("abort", abort, { once: true });
   const samples = setInterval(() => { void owned.sample(); }, 500);
   samples.unref();
-  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
+  void closed.catch(() => {});
+  // A scope's leader can exit while descendants retain protocol pipes. Clean
+  // the unit on leader exit, then drain close; waiting for close first can hang.
+  const exited = input.scope ? new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  }) : closed;
   const completion = exited.then(async result => {
     const evidence = await owned.finish(cancelled);
+    await closed;
     release();
     await resources.onEvidence?.(evidence);
     const signalled = evidence.mainExitCode === 2 || evidence.mainExitCode === 3;

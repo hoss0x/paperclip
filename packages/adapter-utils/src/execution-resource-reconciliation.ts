@@ -7,10 +7,10 @@ export interface ExistingExecutionUnit { unit: string; memoryMaxBytes: number }
 
 /** User-manager state is authoritative; PID reuse and local process maps are not. */
 export async function listActiveExecutionUnits(slice: string): Promise<ExistingExecutionUnit[]> {
-  const { stdout } = await execFileAsync("systemctl", ["--user", "list-units", "--all", "--type=service",
-    "--plain", "--no-legend", "--no-pager", "paperclip-execution-*.service"], { timeout: 5_000, maxBuffer: 1024 * 1024 });
+  const { stdout } = await execFileAsync("systemctl", ["--user", "list-units", "--all", "--type=service,scope",
+    "--plain", "--no-legend", "--no-pager", "paperclip-execution-*.service", "paperclip-execution-*.scope"], { timeout: 5_000, maxBuffer: 1024 * 1024 });
   const units = stdout.trim().split("\n").map(line => line.trim().split(/\s+/)[0]!)
-    .filter(unit => /^paperclip-execution-[a-zA-Z0-9-]+\.service$/.test(unit));
+    .filter(unit => /^paperclip-execution-[a-zA-Z0-9-]+\.(?:service|scope)$/.test(unit));
   if (!units.length) return [];
   const { stdout: properties } = await execFileAsync("systemctl", ["--user", "show", ...units,
     "--property=Id,Slice,ActiveState,MemoryMax"], { timeout: 5_000, maxBuffer: 1024 * 1024 });

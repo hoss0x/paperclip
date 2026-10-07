@@ -12,7 +12,8 @@ function fixture(payloads: Record<string, unknown>[]) {
 }
 
 describe("durable legacy resource-unit cancellation", () => {
-  it("stops each owned unit once and confirms its inactive state before returning", async () => {
+  it.each(["service", "scope"])("stops each owned %s once and confirms its inactive state before returning", async suffix => {
+    const unit = `paperclip-execution-run-1-unit.${suffix}`;
     const { db, where } = fixture([{ unit }, { unit }, { unit: "paperclip-execution-other-run-unit.service" },
       { unit: `${unit};bad` }, { unit: "paperclipai.service" }]);
     const calls: string[][] = [];
