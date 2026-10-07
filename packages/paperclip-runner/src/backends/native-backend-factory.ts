@@ -58,6 +58,7 @@ export function createNativeSessionBackend(
       environment: options.environment,
       workingDirectoryAuthority: options.workingDirectoryAuthority,
       transportFactory: options.codexTransportFactory,
+    processTransportFactory: options.processTransportFactory,
     });
   }
   if (input.provider.kind === "opencode") {
@@ -110,5 +111,6 @@ export function createNativeSessionBackend(
     environment: options.environment,
     workingDirectoryAuthority: options.workingDirectoryAuthority,
     transportFactory: options.codexTransportFactory,
+    processTransportFactory: options.processTransportFactory,
   });
 }

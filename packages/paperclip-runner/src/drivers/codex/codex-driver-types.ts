@@ -9,7 +9,7 @@ import type {
   CodexModelContextSnapshot,
   CodexTaskEnvelope,
 } from "../../contracts/codex.js";
-import type { CodexAppServerTransport } from "./app-server-transport.js";
+import type { ProcessCodexTransportOptions, CodexAppServerTransport } from "./app-server-transport.js";
 import type { CodexWorkingDirectoryAuthority } from "./codex-boundaries.js";
 import type { CodexQuestionResponseContext } from "./codex-question-adapter.js";
 
@@ -36,6 +36,7 @@ export interface CodexAppServerDriverOptions {
    * may opt out explicitly without changing the production default.
    */
   includeCollaborationModeInstructions?: boolean;
+  processTransportFactory?: (options: ProcessCodexTransportOptions) => Promise<CodexAppServerTransport>;
   transportFactory?: (context?: {
     providerRecoveryPolicy?: PersistedHarnessSession["providerRecoveryPolicy"];
     persistedSession?: Pick<

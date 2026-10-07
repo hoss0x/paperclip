@@ -311,6 +311,14 @@ interface PendingRequest {
 }
 
 export interface ProcessCodexTransportOptions {
+  launchSignal?: AbortSignal;
+  /** Controller-owned OS boundary; streams stay in this protocol transport. */
+  ownedProcess?: {
+    child: ChildProcessWithoutNullStreams;
+    pid: number;
+    completion: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+    signal: (signal: NodeJS.Signals) => void;
+  };
   workingDirectory?: string;
   command?: string;
   args?: string[];
@@ -354,6 +362,7 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
   #resolveExit!: () => void;
   readonly #exitPromise: Promise<void>;
   readonly #processGroup: boolean;
+  readonly #ownedProcess?: ProcessCodexTransportOptions["ownedProcess"];
   readonly #startedAt: string;
   readonly #closeGraceMs: number;
   readonly #onProcess?: (info: CodexTransportProcessInfo) => void;
@@ -383,7 +392,8 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
       options.maxBufferedOutputBytes,
       DEFAULT_MAX_BUFFERED_OUTPUT_BYTES,
     );
-    this.#processGroup =
+    this.#ownedProcess = options.ownedProcess;
+    this.#processGroup = !options.ownedProcess &&
       options.processGroup === true && process.platform !== "win32";
     this.#startedAt = new Date().toISOString();
     this.#closeGraceMs = positiveLimit(options.closeGraceMs, 1_000);
@@ -401,7 +411,7 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
         DEFAULT_MAX_QUEUED_NOTIFICATION_BYTES,
       ),
     );
-    this.#process = spawn(
+    this.#process = options.ownedProcess?.child ?? spawn(
       options.command ?? "codex",
       options.args ?? ["app-server"],
       {
@@ -445,7 +455,7 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
     this.#process.stderr.on("end", () => this.#stderrDecoder.end());
     this.#process.stdin.on("error", (error) => this.#fatal(error));
     this.#process.on("error", (error) => this.#fatal(error));
-    this.#process.on("exit", (code, signal) => {
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
       this.#exited = true;
       this.#exitCode = code;
       this.#exitSignal = signal;
@@ -458,7 +468,14 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
           ),
         );
       }
-    });
+    };
+    if (options.ownedProcess) {
+      void options.ownedProcess.completion.then(result => onExit(result.code, result.signal), error => {
+        this.#exited = true;
+        this.#resolveExit();
+        this.#fatal(error instanceof Error ? error : new Error(String(error)));
+      });
+    } else this.#process.on("exit", onExit);
     this.#onProcess?.(this.processInfo());
   }
 
@@ -526,11 +543,14 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
         ]);
       }
     }
+    // A protocol shutdown is not settled until the OS boundary has reaped all
+    // descendants and recorded resource evidence. Cleanup failures propagate.
+    if (this.#ownedProcess) await this.#ownedProcess.completion;
   }
 
   processInfo(): CodexTransportProcessInfo {
     return {
-      pid: this.#process.pid ?? null,
+      pid: this.#ownedProcess?.pid ?? this.#process.pid ?? null,
       processGroupId: this.#processGroup ? (this.#process.pid ?? null) : null,
       startedAt: this.#startedAt,
       exited: this.#exited,
@@ -540,6 +560,7 @@ export class ProcessCodexAppServerTransport implements CodexAppServerTransport {
   }
 
   #signal(signal: NodeJS.Signals): void {
+    if (this.#ownedProcess) { this.#ownedProcess.signal(signal); return; }
     const pid = this.#process.pid;
     if (this.#processGroup && pid !== undefined) {
       try {

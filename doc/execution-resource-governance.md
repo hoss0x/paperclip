@@ -3,9 +3,10 @@
 Implementation in progress on `feat/runtime-resource-governance`. Server
 adapter dispatch now installs the shared operator resource context and persists
 unit ownership before launch. Shared child-runner and native runnerd launcher
-paths are validated through real systemd units. Direct native Codex/OpenCode/ACPX
-transports still have separate spawn paths that need integration and session/resume
-coverage. Do not deploy this intermediate branch as a completed resource fix.
+paths are validated through real systemd units. Direct native Codex now uses a
+stream-preserving boundary with JSON-RPC, queued cancellation and descendant
+cleanup tests. Direct OpenCode/ACPX transports still need integration, and full
+native session/resume/restart qualification remains pending. Do not deploy this intermediate branch as a completed resource fix.
 
 ## Shared boundary
 
@@ -31,9 +32,15 @@ bridge that returns a handle while admission/launch proceeds asynchronously;
 it updates the handle with the worker PID and uses whole-unit signals. Raw
 process output does not gain a new native logging path. Full native protocol,
 reattach and session/resume coverage is still pending.
-Calls outside this context retain their existing direct-spawn behavior. The
-native direct-backend factory currently bypasses the runnerd launcher seam;
-that path remains unfinished.
+Calls outside this context retain their existing direct-spawn behavior. The direct Codex backend now uses an async
+process-transport factory. `resource-stdio-process.ts` reuses policy, admission
+and systemd boundary primitives while leaving protocol decoding and diagnostic
+redaction in the transport. It reports the worker PID, signals the whole unit,
+and settles close only after descendant cleanup and terminal evidence. The
+systemd client receives operator user-manager connection variables; the provider
+receives its exact private invocation environment. Startup cancellation reaches
+admission before a process can launch. Existing runnerd/remote factory input
+contracts stay unchanged. Direct OpenCode/ACPX launches remain unfinished.
 
 The boundary sets `MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `CPUQuota`,
 `TasksMax`, `KillMode=control-group` and `OOMPolicy=stop`. An explicitly requested
@@ -129,7 +136,7 @@ log. A memory kill overrides an adapter success or parser failure with
 Tests exercise failed ownership persistence, OOM projection/recovery, native
 launcher context propagation, and real surviving-unit admission reconstruction.
 
-Remaining before handoff: direct native transport integration and full session/
+Remaining before handoff: direct OpenCode/ACPX transport integration and full session/
 resume/cancellation/restart coverage, integrated
 UI/API/PostgreSQL stress and low-memory measurements, full checks, internal
 review, and the focused PR. No live deployment or resource-PR merge is authorized.

@@ -1,3 +1,4 @@
+import { createResourceCodexTransport } from "./resource-codex-transport.js";
 import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
 import { resolveAcpxQualification } from "./acpx-qualification.js";
 import { readLocalAiCredentialFile } from "../local-ai-credential-file.js";
@@ -8357,6 +8358,8 @@ async function executePaperclipNativeSessionWithinScope(
               createNativeSessionBackend(input.execution, {
                 runnerInstanceId: input.runnerInstanceId,
                 onSpawn: input.onSpawn,
+                processTransportFactory: createResourceCodexTransport(input.execution.binding.runId),
+                environment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
                 opencodeEnvironment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
                 acpxEnvironment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
                 opencodeRuntimeDirectory: resolve(
