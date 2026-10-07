@@ -1,10 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { createLocalDiskStorageProvider } from "../storage/local-disk-provider.js";
+import { createStorageService } from "../storage/service.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
 import express from "express";
 import request from "supertest";
 import { eq } from "drizzle-orm";
-import { agents, assets, companies, createDb } from "@paperclipai/db";
+import { agents, assets, companies, createDb, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS } from "@paperclipai/db";
 import { getEmbeddedPostgresTestSupport, startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { agentAvatarUploadService, prepareAgentAvatar } from "../services/agent-avatar-upload.js";
 import { agentAvatarUploadRoutes } from "../routes/agent-avatar-uploads.js";
@@ -54,7 +59,7 @@ describeDb("persisted agent avatars and access", () => {
     db = createDb(tempDb.connectionString);
     await db.insert(companies).values([{ id: companyId, name: "Avatars", issuePrefix: "AVT" }, { id: otherCompanyId, name: "Other", issuePrefix: "OTH" }]);
     await db.insert(agents).values({ id: agentId, companyId, name: "Omar" });
-  }, 30_000);
+  }, EMBEDDED_POSTGRES_TEST_TIMEOUT_MS);
   afterAll(async () => { await tempDb?.cleanup(); });
 
   function app(actor: any = { type: "board", source: "local_implicit", userId: "user-1" }) {
@@ -84,6 +89,28 @@ describeDb("persisted agent avatars and access", () => {
     expect((await svc.getAgent(agentId))!.avatarAssetId).toBeNull();
     expect(objects.size).toBe(0);
     expect(await db.select().from(assets).where(eq(assets.id, second.body.avatarAssetId))).toEqual([]);
+  });
+
+  it("preserves the photo when database and disk-storage services are recreated", async () => {
+    const directory = await mkdtemp(path.join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "avatar-disk-"));
+    const disk = () => createStorageService(createLocalDiskStorageProvider(directory));
+    try {
+      const firstService = agentAvatarUploadService(db, disk());
+      const uploaded = await firstService.upload(agentId, companyId, png, "image/png", { agentId: null, userId: null });
+      const reopenedDb = createDb(tempDb.connectionString);
+      const reopenedStorage = disk();
+      const reopenedService = agentAvatarUploadService(reopenedDb, reopenedStorage);
+      expect((await reopenedService.getAgent(agentId))!.avatarAssetId).toBe(uploaded.avatarAssetId);
+      const [asset] = await reopenedDb.select().from(assets).where(eq(assets.id, uploaded.avatarAssetId!));
+      const stored = await reopenedStorage.getObject(companyId, asset.objectKey);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stored.stream) chunks.push(Buffer.from(chunk));
+      expect(await sharp(Buffer.concat(chunks)).metadata()).toMatchObject({ format: "webp", width: 512, height: 512 });
+      await reopenedService.remove(agentId, companyId);
+      expect((await reopenedStorage.headObject(companyId, asset.objectKey)).exists).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("rejects invalid uploads before storage and preserves the current photo", async () => {

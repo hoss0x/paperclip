@@ -23,7 +23,8 @@ test("profile photos persist, replace and reset across the organization chart", 
   const photoInput = { name: "portrait.png", mimeType: "image/png", buffer: photo };
   const prefix = `/${company.issuePrefix}`;
   const evidence = async (name: string) => {
-    const target = process.env.PAPERCLIP_AVATAR_EVIDENCE_DIR;
+    const target = process.env.PAPERCLIP_AVATAR_EVIDENCE_DIR
+      ?? (process.env.PAPERCLIP_RUN_SCRATCH_DIR ? path.join(process.env.PAPERCLIP_RUN_SCRATCH_DIR, "evidence") : undefined);
     if (target) await page.screenshot({ path: path.join(target, name), fullPage: true });
   };
   try {
