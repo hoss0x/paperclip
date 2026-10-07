@@ -5,6 +5,8 @@ import type { ExecutionResourceEvidence } from "./systemd-execution.js";
 import { listActiveExecutionUnits, reconcileExecutionAdmission } from "./execution-resource-reconciliation.js";
 
 export interface ExecutionResourceContext {
+  /** Controller-owned run identity for helper ownership and restart cleanup. */
+  runId?: string;
   policy: ExecutionResourcePolicy;
   admission: ExecutionResourceAdmission;
   /** Root leases within an already-reserved, bounded run envelope. */
@@ -32,6 +34,7 @@ export function withExecutionResourceContext<T>(context: ExecutionResourceContex
 
 /** Resolve only the control-plane environment, never adapter configuration. */
 export async function withOperatorExecutionResources<T>(input: {
+  runId?: string;
   scratchDir: string;
   slice?: string;
   signal?: AbortSignal;

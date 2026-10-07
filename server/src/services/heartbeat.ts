@@ -24763,6 +24763,7 @@ export function heartbeatService(
                     issueId: issueRef?.id ?? null, issueIdentifier: issueRef?.identifier ?? null,
                   });
                   return executeWithResourceGovernance({
+                    runId: run.id,
                     scratchDir: runScratch.dir,
                     signal: executionControl.controller.signal,
                     record: async event => { await appendRunEvent(run, { ...event, stream: "system", level: "info" }); },
@@ -24996,6 +24997,7 @@ export function heartbeatService(
                     issueId: issueRef?.id ?? null, issueIdentifier: issueRef?.identifier ?? null,
                   });
                   return executeWithResourceGovernance({
+                    runId: run.id,
                     scratchDir: runScratch.dir,
                     signal: executionControl.controller.signal,
                     record: async event => { await appendRunEvent(run, { ...event, stream: "system", level: "info" }); },

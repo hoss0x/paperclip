@@ -249,7 +249,7 @@ provide an OS memory boundary.
 | --- | --- |
 | `adapter-utils/src/ssh.ts` | Host SSH clients and paired tar/SSH streams use direct child processes. Git bundle/fetch/merge helpers use direct `execFile`. Transfer pairs must share one reservation so one partner cannot queue behind the other. Preserve backpressure, authentication cleanup, cancellation and restoration ordering. |
 | `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction uses direct `execFile`, including durable workspace seeds. It also needs a finite execution deadline and whole-tree cleanup. |
-| `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler limits concurrency, output and time, but its runner still starts a host process group without a cgroup ceiling. Detached process-group cleanup does not give memory isolation. |
+| `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler now uses a cgroup scope through the shared launcher. UI/API scans install an operator resource context even outside agent dispatch; admission waits count toward the scan deadline. Run-owned scans retain the controller run id for recorded-unit cancellation. Existing scheduler/output/backpressure and Git locking rules remain in place. |
 | `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Metadata helpers remain direct launches; scheduled expensive scans do not cover every Git command. Review hook/filter execution and large repository operations before treating these as small helpers. |
 | `server/services/agent-directory-working-copies.ts` | SSH instruction staging/restoration can run outside the current adapter dispatch resource context. Containing only adapter execution will not cover these calls. |
 | `server/services/native-runtime/native-codex-runner.ts` (`executeNativeCodexRunner`) | An exported older runner entry point still launches directly. Source search found no production caller, only tests; retain this as an explicit compatibility gap until it is governed or removed with evidence. The binary resolver in this module is used in production. |
@@ -265,6 +265,15 @@ Rebuild and stage the release runner before packaged qualification. A stale loca
 `dist/bin/paperclip-runnerd` can precede the rebuilt debug binary in resolution and
 lack the private resource handoff. Passing tests against an explicitly selected
 debug loader does not qualify that staged release artifact.
+
+Scheduled Git scans share global admission and the aggregate slice with agents.
+When agents use all capacity, scans queue until capacity is available or their
+deadline expires; they do not fall back to unrestricted execution. The stress
+qualification must assess UI behavior under this contention, including an
+operator configuration with one execution slot. Host helpers retain their
+private launch files when unit cleanup fails and log memory-limit evidence once
+per failed helper. Other direct Git, SSH and archive helpers in the table still
+require integration.
 
 A bounded compiler diagnostic excluded 258 colocated server test roots without
 changing the repository configuration. It still approached the existing 2.2 GiB

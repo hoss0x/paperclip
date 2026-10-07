@@ -26,6 +26,7 @@ export class ExecutionResourceLimitError extends Error {
 
 /** Resource failures are projected once, independently of adapter parsers. */
 export async function executeWithResourceGovernance(input: {
+  runId?: string;
   scratchDir: string;
   slice?: string;
   signal: AbortSignal;
@@ -33,6 +34,7 @@ export async function executeWithResourceGovernance(input: {
 }, execute: () => Promise<AdapterExecutionResult>): Promise<AdapterExecutionResult> {
   const evidence: ExecutionResourceEvidence[] = [];
   return withOperatorExecutionResources({
+    runId: input.runId,
     scratchDir: input.scratchDir, slice: input.slice, signal: input.signal,
     nativeLoaderCommand: resolvePaperclipRunnerBinary,
     onUnitPrepared: async unit => input.record({ eventType: RESOURCE_UNIT_PREPARED,
