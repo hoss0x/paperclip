@@ -21,6 +21,8 @@ function run(script: string, extra: Partial<Parameters<typeof runChildProcess>[3
 (enabled ? describe : describe.skip)("shared runner resource context", () => {
   it("keeps stream/persistence ordering and reports the worker PID and sibling cgroup", async () => {
     const resources = context();
+    let preparedUnit: string | undefined;
+    resources.onUnitPrepared = async meta => { preparedUnit = meta.unit; };
     let persisted = false;
     let identity: { pid: number; executionUnit?: string } | undefined;
     const result = await withExecutionResourceContext(resources, () => run(`
@@ -33,6 +35,7 @@ function run(script: string, extra: Partial<Parameters<typeof runChildProcess>[3
     }));
     const output = JSON.parse(result.stdout.trim());
     expect(result.exitCode, result.stderr).toBe(0);
+    expect(identity?.executionUnit).toBe(preparedUnit);
     expect(identity?.pid).toBe(output.pid);
     expect(result.pid).toBe(output.pid);
     expect(output).toMatchObject({ input: "hello\n", jobs: "1", secret: '$HOME "literal"\nvalue' });

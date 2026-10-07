@@ -1,8 +1,11 @@
 # Execution resource governance
 
-Implementation in progress on `feat/runtime-resource-governance`. The shared child-process runner now accepts a resource context and is tested
+Implementation in progress on `feat/runtime-resource-governance`. The shared
+child-process runner now accepts a resource context and is tested
 through real systemd units. That context is **not yet connected to server adapter
-dispatch or native runner transports**. These settings do not currently isolate ordinary
+dispatch**. The native session executor has a context-aware launcher hook,
+but its session/resume paths are not yet validated under isolation. These
+settings do not currently isolate ordinary
 agent runs. Do not deploy this intermediate branch as a completed resource fix.
 
 ## Shared boundary
@@ -23,6 +26,12 @@ capacity only after whole-unit cleanup. The loader writes a private worker-PID
 marker before `execve`; spawn metadata and stdin gating use that PID, rather than
 the `systemd-run` client PID. Signals target the full unit. Exit results retain
 worker signal semantics and name memory failures `execution_resource_limit`.
+A pre-launch `onUnitPrepared` hook lets dispatch persist unit ownership before
+provider work can start. The native synchronous launcher seam now has a shared
+bridge that returns a handle while admission/launch proceeds asynchronously;
+it updates the handle with the worker PID and uses whole-unit signals. Raw
+process output does not gain a new native logging path. Full native protocol,
+reattach and session/resume coverage is still pending.
 Calls outside this context retain their existing direct-spawn behavior until
 dispatch integration is complete.
 
@@ -62,8 +71,16 @@ that consumes the reserved host memory. Its admission primitive reserves complet
 hard-memory budgets in FIFO order, checks both memory capacity and concurrency,
 and removes cancelled queued requests. Dispatch integration must use one pool
 across all companies/adapters, release only after verified cleanup, and reconcile
-surviving units after controller restart. Multiple controllers need a shared OS
-aggregate envelope; a process-local queue alone cannot bound them.
+surviving units after controller restart. `withOperatorExecutionResources` now
+prepares `paperclip-executions.slice` with `MemoryMax` equal to total admission
+capacity. Its aggregate swap cap equals the configured per-execution swap cap
+(default zero). All services launched in that context enter this slice. Limits
+survive controller restarts; runtime slice configuration is recreated after a
+user-manager restart. Existing conflicting capacity is rejected before launch.
+The real aggregate test used separate launch paths without a shared JS queue
+and proved slice OOM containment plus later recovery. Reconciliation of existing
+units into admission and durable run ownership is still required; the OS cap
+bounds memory but does not provide cross-controller FIFO scheduling.
 
 The low-memory environment supplies supported defaults for `CARGO_BUILD_JOBS`,
 `CMAKE_BUILD_PARALLEL_LEVEL`, `RAYON_NUM_THREADS`, Go runtime concurrency, and pnpm

@@ -95,6 +95,7 @@ export interface RunningProcess {
   graceSec: number;
   processGroupId: number | null;
   resourceBoundary?: SystemdExecutionBoundary;
+  cancelled?: boolean;
 }
 
 interface SpawnTarget {
@@ -4732,7 +4733,8 @@ export async function runChildProcess(
             release = await resources.admission.acquire(resources.policy.memoryMaxBytes, resources.signal);
             resourceBoundary = await prepareSystemdExecution({ runId, command: target.command, args: target.args,
               cwd: target.cwd ?? opts.cwd, env: applyLowMemoryEnvironment({ ...mergedEnv, ...target.env }, resources.policy),
-              policy: resources.policy, scratchDir: resources.scratchDir });
+              policy: resources.policy, scratchDir: resources.scratchDir, slice: resources.slice });
+            await resources.onUnitPrepared?.({ unit: resourceBoundary.unit, memoryMaxBytes: resources.policy.memoryMaxBytes });
             if (resources.signal?.aborted) throw new Error("Execution cancelled before launch");
           }
         } catch (error) {
@@ -4802,7 +4804,7 @@ export async function runChildProcess(
           clearTimeout(abortKillTimer);
           clearInterval(sampleTimer);
           await spawnPersistPromise;
-          const evidence = await resourceBoundary?.finish(cancelled);
+          const evidence = await resourceBoundary?.finish(cancelled || running.cancelled);
           // Never admit a successor before whole-unit cleanup has succeeded.
           release?.();
           await target.cleanup?.();

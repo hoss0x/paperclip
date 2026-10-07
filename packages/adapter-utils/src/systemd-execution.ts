@@ -62,6 +62,7 @@ export async function prepareSystemdExecution(input: {
   env: NodeJS.ProcessEnv;
   policy: ExecutionResourcePolicy;
   scratchDir: string;
+  slice?: string;
 }): Promise<SystemdExecutionBoundary> {
   if (process.platform !== "linux" || typeof process.execve !== "function") {
     throw new Error("systemd execution requires Linux and Node.js execve support");
@@ -128,6 +129,7 @@ export async function prepareSystemdExecution(input: {
     command: "systemd-run",
     args: ["--user", "--pipe", "--wait", "--quiet", "--service-type=exec", "--expand-environment=no",
       `--unit=${unit}`, `--working-directory=${input.cwd}`,
+      ...(input.slice ? [`--slice=${input.slice}`] : []),
       `--property=MemoryHigh=${policy.memoryHighBytes}`,
       `--property=MemoryMax=${policy.memoryMaxBytes}`,
       `--property=MemorySwapMax=${policy.memorySwapMaxBytes}`,

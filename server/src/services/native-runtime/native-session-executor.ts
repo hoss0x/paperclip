@@ -1,3 +1,4 @@
+import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
 import { resolveAcpxQualification } from "./acpx-qualification.js";
 import { readLocalAiCredentialFile } from "../local-ai-credential-file.js";
 import { prepareGrokRunnerCredentials } from "./grok-runner-credentials.js";
@@ -12594,7 +12595,9 @@ async function createRunnerdBackendWithinSessionClaim(
         sourceCodexHome: remoteTarget
           ? resolveSourceCodexHome(resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment))
           : undefined,
-        runnerProcessLauncher: remoteProcessLauncher,
+        runnerProcessLauncher: remoteProcessLauncher ?? createResourceProcessLauncher({
+          runId: input.execution.binding.runId, onSpawn: input.onSpawn,
+        }),
         runnerReconnectGraceMs: remoteTarget ? 120_000 : undefined,
         adoptExistingRunner: adoptedProcess,
         environment: effectiveRunnerEnvironment,
