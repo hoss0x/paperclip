@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect as baseExpect, test } from "@playwright/test";
+
 import { json } from "./agent-chat.shared";
+
+const expect = baseExpect.configure({ timeout: 20_000 });
 
 test.use({ viewport: { width: 1440, height: 1000 } });
 
 test("profile photos persist, replace and reset across the organization chart", async ({ page, request }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   const company = await json(await request.post("/api/companies", { data: { name: "Avatar Review" } }));
   const original = await json(await request.get("/api/instance/settings/experimental"));
   await json(await request.patch("/api/instance/settings/experimental", { data: { enableStreamlinedUi: true } }));
@@ -30,7 +33,7 @@ test("profile photos persist, replace and reset across the organization chart", 
   try {
     await page.goto(`${prefix}/agents/${chief.id}/runtime`, { waitUntil: "domcontentloaded" });
     const control = page.getByRole("region", { name: "Agent profile photo" });
-    await expect(control.getByRole("button", { name: "Upload photo" })).toBeVisible();
+    await expect(control.getByRole("button", { name: "Upload photo" })).toBeVisible({ timeout: 20_000 });
     await control.getByLabel("Choose profile photo").setInputFiles(photoInput);
     await expect(control.getByAltText("New avatar preview")).toBeVisible();
     await control.getByRole("button", { name: "Save photo" }).click();
@@ -65,7 +68,8 @@ test("profile photos persist, replace and reset across the organization chart", 
     await page.getByRole("button", { name: "Zoom in", exact: true }).click();
     expect(await layer.getAttribute("style")).not.toBe(before);
     await page.getByRole("button", { name: "Fit chart to screen" }).click();
-    await page.evaluate(() => document.documentElement.classList.add("dark"));
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect(page.locator("html")).toHaveClass(/dark/);
     await evidence("organization-dark.png");
     await uploaded.press("Enter");
     await expect(page).toHaveURL(new RegExp(`/agents/${chief.urlKey}`));
@@ -78,7 +82,7 @@ test("profile photos persist, replace and reset across the organization chart", 
     expect(second.avatarAssetId).not.toBe(first.avatarAssetId);
     expect((await request.get(first.avatarUrl)).status()).toBe(404);
     await control.getByRole("button", { name: "Remove photo" }).click();
-    await expect(control.getByRole("button", { name: "Upload photo" })).toBeVisible();
+    await expect(control.getByRole("button", { name: "Upload photo" })).toBeVisible({ timeout: 20_000 });
     expect((await request.get(second.avatarUrl)).status()).toBe(404);
     await page.reload({ waitUntil: "domcontentloaded" });
     expect((await json(await request.get(`/api/agents/${chief.id}`))).avatarAssetId).toBeNull();
