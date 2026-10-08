@@ -13,6 +13,7 @@ export interface ResourceProcessLaunchSpec {
 export interface ResourceProcessHandle {
   child: { pid?: number; exitCode: number | null; signalCode?: NodeJS.Signals | null; kill(signal?: NodeJS.Signals | number): boolean };
   completion: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>;
+  ready: Promise<{ pid: number; processGroupId: number | null; startedAt: string; ownershipRecorded: boolean }>;
   processGroupId: number | null;
   startedAt: string;
 }
@@ -43,6 +44,11 @@ export function createResourceProcessLauncher(input: {
       },
     };
     const startedAt = new Date().toISOString();
+    let resolveReady!: (identity: { pid: number; processGroupId: number | null; startedAt: string; ownershipRecorded: boolean }) => void;
+    let rejectReady!: (error: unknown) => void;
+    const ready = new Promise<{ pid: number; processGroupId: number | null; startedAt: string; ownershipRecorded: boolean }>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+    // Cancellation may happen before the consumer begins awaiting readiness.
+    void ready.catch(() => {});
     const completion = withExecutionResourceContext({ ...resources, signal: controller.signal }, async () => {
       const environment = Object.fromEntries(Object.entries(spec.environment).filter((entry): entry is [string, string] => entry[1] !== undefined));
       const result = await runChildProcess(executionId, spec.command, [...spec.args], {
@@ -50,13 +56,25 @@ export function createResourceProcessLauncher(input: {
         // Native runner-owned diagnostics remain the redacted, bounded channel.
         // Do not expose raw process output through a new logging path.
         onLog: async () => {},
-        onSpawn: async meta => { child.pid = meta.pid; await input.onSpawn?.(meta); },
+        onSpawn: async meta => {
+          child.pid = meta.pid;
+          try {
+            await input.onSpawn?.(meta);
+            resolveReady({ ...meta, ownershipRecorded: input.onSpawn !== undefined });
+          } catch (error) {
+            rejectReady(error);
+            controller.abort(error);
+            throw error;
+          }
+        },
       });
       child.exitCode = result.exitCode;
       child.signalCode = result.signal as NodeJS.Signals | null;
       return { code: result.exitCode, signal: child.signalCode, stdout: "", stderr: "" };
-    }).catch(error => { child.exitCode = 1; throw error; })
+    }).catch(error => { child.exitCode = 1; rejectReady(error); throw error; })
       .finally(() => resources.signal?.removeEventListener("abort", parentAbort));
-    return { child, completion, processGroupId: null, startedAt };
+    // A queued cancellation can settle without ever spawning a worker.
+    void completion.then(() => { if (child.pid === undefined) rejectReady(new Error("Native execution ended before launch")); }, () => {});
+    return { child, completion, ready, processGroupId: null, startedAt };
   };
 }

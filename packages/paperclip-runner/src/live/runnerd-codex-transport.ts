@@ -3354,7 +3354,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   readonly #root: string;
   readonly #ownsRoot: boolean;
   readonly #queue = new NotificationQueue();
-  readonly #startedAt = new Date().toISOString();
+  #startedAt = new Date().toISOString();
   readonly #evidence: CapabilityRunnerdProcessEvidence;
   #handler: CodexServerRequestHandler = async () => ({
     success: false,
@@ -3997,10 +3997,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   }
 
   async #publishSpawnedProcess(handle: RunnerProcessHandle): Promise<void> {
-    this.#evidence.runnerPid = handle.child.pid ?? null;
-    this.#evidence.runnerProcessGroupId = handle.processGroupId ?? null;
+    const identity = await handle.ready;
+    this.#startedAt = identity?.startedAt ?? handle.startedAt ?? this.#startedAt;
+    this.#evidence.runnerPid = identity?.pid ?? handle.child.pid ?? null;
+    this.#evidence.runnerProcessGroupId = identity ? identity.processGroupId : handle.processGroupId ?? null;
     this.#publish();
-    if (handle.child.pid !== undefined) {
+    if (handle.child.pid !== undefined && !identity?.ownershipRecorded) {
       await this.options.onSpawn?.({
         pid: handle.child.pid,
         processGroupId: handle.processGroupId ?? null,

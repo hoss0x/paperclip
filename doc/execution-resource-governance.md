@@ -369,3 +369,32 @@ does not depend on operator configuration. In a 1,500 MiB controller unit it
 reached the deletion lane but exceeded its 180-second deadline. This remains an
 open validation failure; the fixture timeout and resource defaults were not
 increased to claim a pass.
+
+### Worker readiness and database-backed restart qualification (2026-10-08)
+
+The synchronous launcher now exposes an asynchronous readiness barrier carrying
+the admitted worker identity. The transport waits for identity and ownership
+persistence before publishing the PID and activating its route. A launcher that
+already persisted ownership does not issue a second spawn notification. Failed
+persistence rejects readiness and aborts the complete execution unit; queued
+cancellation also rejects readiness without launching a worker.
+
+The real PostgreSQL/runner fixture now records server-owned unit events, checks
+actual cgroup membership and PID fingerprints, rejects foreign company/run
+ownership, and adopts the same runner across simulated hot and hard controller
+recovery. It observes one provider turn, three steering calls, one spawn
+notification and no retry run. This qualifies the recovery component with the
+resource boundary enabled; it does not restart the live managed instance.
+
+The deletion lane previously spawned an rm process for each pathname. It now
+checks every ancestor in each bounded 64-path batch before one quoted rm call.
+All 98 sandbox regressions passed. The four 40,000-file filename lanes passed
+in 159 seconds, then the final fixture with unusual deleted filenames passed
+alone in 163 seconds under the original 180-second deadline and 1,500 MiB
+validation ceiling. A concurrent validation run still exceeded that deadline;
+sequential heavy validation remains necessary on this host.
+
+A separate one-checker/single-threaded server compiler diagnostic exceeded
+2,200 MiB. Reducing checker count alone did not resolve compiler pressure. No
+compiler defaults, full-check success, integrated stress result or minimum-VPS
+recommendation follows from this checkpoint.
