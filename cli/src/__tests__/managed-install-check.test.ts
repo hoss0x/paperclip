@@ -86,3 +86,24 @@ describe("managed install doctor checks", () => {
     ]);
   });
 });
+
+
+describe("isolated home and shared CLI shim ownership", () => {
+  it("ignores a managed shim targeting another home without weakening that home's check", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-isolated-"));
+    const managed = resolveInstallStorePaths({ paperclipHome: path.join(root, "managed"), homeDir: root });
+    writeManagedShim(managed);
+    const isolated = resolveInstallStorePaths({ paperclipHome: path.join(root, "isolated"), homeDir: root });
+    expect(managedInstallChecks(isolated)).toEqual([expect.objectContaining({ name: "Managed install", status: "pass" })]);
+    expect(managedInstallChecks(managed)).toEqual([expect.objectContaining({ name: "Managed install manifest", status: "fail" })]);
+  });
+  it("still detects store artifacts when the shared shim points elsewhere", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-doctor-isolated-"));
+    const other = resolveInstallStorePaths({ paperclipHome: path.join(root, "other"), homeDir: root });
+    writeManagedShim(other);
+    const selected = resolveInstallStorePaths({ paperclipHome: path.join(root, "selected"), homeDir: root });
+    fs.mkdirSync(selected.cliRoot, { recursive: true });
+    fs.writeFileSync(selected.markerPath, MANAGED_STORE_MARKER);
+    expect(managedInstallChecks(selected)).toEqual([expect.objectContaining({ name: "Managed install manifest", status: "fail" })]);
+  });
+});
