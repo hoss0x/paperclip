@@ -529,3 +529,24 @@ shows substantial development compiler baseline cost before semantic checking;
 it does not establish the full check's required envelope or prove a compiler
 leak. Full semantic checking still lacks a passing measured envelope. No larger
 compiler ceiling or smaller production-VPS claim is justified by this result.
+
+## Retained native attribution gate — 2026-10-08
+
+A real shared-wrapper/Codex-transport fixture keeps its process after a first
+successful run, then triggers a 96 MiB cgroup OOM during a second run. The unit
+remains contained and cleanup succeeds, but the completion callback records
+resource evidence against the first run's captured context. The second run
+returns a generic command failure without `execution_resource_limit`. The 521
+passing executor fixtures do not prove this retained-resource ownership path.
+
+This is a confirmed shared-boundary correlation defect. It needs an authenticated
+ownership handoff for retained units and a real two-run regression. Preserve
+sessions and verified cancellation authority; disabling reuse is not an adequate
+fix. End-to-end retained-provider qualification remains open.
+
+The final serial workspace typecheck and full build both reached the server
+and exhausted the same 2200 MiB validation envelope. Runner/Rust prerequisites
+passed. The complete test command reached its 900-second deadline without a
+complete suite result or an OOM. No larger memory ceiling was used. The branch
+and draft PR remain unready; packaged production and concurrent minimum VPS
+sizes are not established.
