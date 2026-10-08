@@ -1257,6 +1257,8 @@ export interface CapabilityRunnerdCodexTransportOptions {
     startedAt: string;
     isAlive: () => Promise<boolean> | boolean;
     signal?: (signal: NodeJS.Signals) => Promise<boolean> | boolean;
+    /** Whole-unit containment captured by the controller from durable ownership. */
+    cleanup?: () => Promise<void>;
   };
 }
 
@@ -4336,6 +4338,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
             ? null
             : this.#controlPlaneCheckpoint,
         forceKill: async () => {
+          if (adoptedRunner && this.#adoptedRunnerAuthenticated) {
+            await adoptedRunner.cleanup?.();
+          }
           const handle = this.#handle;
           if (!handle || this.#evidence.runnerExited) return;
           handle.child.kill("SIGKILL");

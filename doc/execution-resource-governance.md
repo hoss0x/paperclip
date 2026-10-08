@@ -346,3 +346,26 @@ aggregate validation slice; the live managed installation was not reconfigured.
 Live cgroup samples are retained because systemd exit-time peaks under-report
 these validation units. Full repository checks and the integrated workload
 benchmark remain required before PR readiness or a minimum-VPS recommendation.
+
+### Adopted local runner containment (2026-10-08)
+
+Local runner adoption now captures its systemd unit from server-owned run events
+scoped to the company and run, checks the live PID start fingerprint and cgroup,
+and verifies the manager's unit identity and memory limit. Signals cover every
+process in that unit. After authenticated transport shutdown, cleanup verifies
+whole-unit termination even if the leader already exited. A failed cleanup
+rejects close; it does not prove the session can be reused. Authentication
+failure and detached-controller finalization do not authorize cleanup. Existing
+unmanaged pre-upgrade runners retain their prior verified-PID behavior.
+
+A real sibling-cgroup fixture kills the leader and confirms its detached child
+survives until recovered unit cleanup. Focused transport regressions check the
+authentication and detached-controller gates. This is component qualification;
+the database-backed hard-restart scenario and remaining provider lifecycle
+coverage still need qualification with the resource boundary enabled.
+
+The 40,000-file streaming fixture now sets repository-local Git identity so it
+does not depend on operator configuration. In a 1,500 MiB controller unit it
+reached the deletion lane but exceeded its 180-second deadline. This remains an
+open validation failure; the fixture timeout and resource defaults were not
+increased to claim a pass.

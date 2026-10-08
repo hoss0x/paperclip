@@ -2,6 +2,7 @@ import { createResourceOpenCodeLauncher } from "./resource-opencode-launcher.js"
 import { createResourceAcpxCommands } from "./resource-acpx-commands.js";
 import { createResourceCodexTransport } from "./resource-codex-transport.js";
 import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
+import { recoverRecordedExecutionUnit } from "./recovered-execution-unit.js";
 import { resolveAcpxQualification } from "./acpx-qualification.js";
 import { readLocalAiCredentialFile } from "../local-ai-credential-file.js";
 import { prepareGrokRunnerCredentials } from "./grok-runner-credentials.js";
@@ -12428,6 +12429,14 @@ async function createRunnerdBackendWithinSessionClaim(
     input.restartRecovery?.kind === "reattach_existing_runner"
       ? input.restartRecovery.process
       : null;
+  const recoveredUnit = target.kind === "local" && localRecoveryProcess
+    ? await recoverRecordedExecutionUnit(input.db, {
+        companyId: input.execution.binding.companyId,
+        runId: input.execution.binding.runId,
+        pid: localRecoveryProcess.pid,
+        isAlive: () => verifiedRecoveryProcessIsAlive(localRecoveryProcess),
+      })
+    : null;
   const adoptedProcess =
     input.restartRecovery?.kind === "reattach_remote_runner"
       ? await verifyRemoteRunnerReattachment({
@@ -12442,7 +12451,8 @@ async function createRunnerdBackendWithinSessionClaim(
             ...localRecoveryProcess,
             isAlive: () => verifiedRecoveryProcessIsAlive(localRecoveryProcess),
             signal: (signal: NodeJS.Signals) =>
-              signalVerifiedRecoveryProcess(localRecoveryProcess, signal),
+              recoveredUnit ? recoveredUnit.signal(signal) : signalVerifiedRecoveryProcess(localRecoveryProcess, signal),
+            cleanup: recoveredUnit?.cleanup,
           }
         : undefined;
   if (adoptedProcess && remoteTarget) {
