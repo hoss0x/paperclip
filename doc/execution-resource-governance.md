@@ -485,3 +485,22 @@ to that allocation unit; server/DB OOM counters stayed zero and live restarts
 stayed seven. These results qualify this hard-limit fixture configuration.
 The default soft threshold, full server compiler, all native/provider lifecycle
 checks, full repository checks and minimum VPS sizes remain unqualified.
+
+### OpenAPI compiler metadata boundary (2026-10-08)
+
+The private OpenAPI converter now accepts the metadata fields it reads rather
+than Zod's full recursive method surface. An isolated 548-file A/B typecheck
+passed before and after: sampled cgroup peaks fell from 652.3 to 431.3 MiB,
+and type instantiations from 1,157,784 to 402,047. JavaScript/declaration emit
+and all ten OpenAPI regressions passed. The complete 740-path OpenAPI document
+was byte-identical. These component measurements do not establish a full-server
+memory reduction or a minimum VPS size.
+
+The complete server still exceeded 2200 MiB after this change. Scratch-only
+diagnostics using all available workspace declaration exports, including a
+production-root variant excluding colocated tests, also exceeded that ceiling.
+A named database-type experiment was reverted because it did not solve the
+blocker. No compiler setting, dependency map or test exclusion was committed.
+Kernel OOM decisions remained in the owned validation cgroups; control-plane
+OOM counters stayed zero and live service restarts stayed seven. Full checks,
+remaining lifecycle/soft-pressure qualification and internal review remain open.
