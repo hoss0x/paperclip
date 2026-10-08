@@ -64,6 +64,10 @@ it("streams and stages all four real Git filename lanes above 32 MiB through the
   const env = { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test", GIT_COMMITTER_EMAIL: "test@example.test" };
   const git = (args: string[]) => runLocalGit(repo, args, { env, timeout: 120_000, maxBuffer: 64 * 1024 });
   await git(["init"]);
+  // Managed Git launchers may remove author environment overrides. Keep this
+  // disposable repository independent of the operator's global Git identity.
+  await git(["config", "user.name", "Test"]);
+  await git(["config", "user.email", "test@example.test"]);
   await git(["commit", "--allow-empty", "-qm", "fixture"]);
   // Leave room for the fixture/staging root below macOS's 1,024-byte path
   // limit while keeping each 40,000-name Git lane above the 32 MiB boundary.
