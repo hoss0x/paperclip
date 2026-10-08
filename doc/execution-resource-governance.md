@@ -455,3 +455,21 @@ Explicit concurrency overrides must leave memory capacity for controller
 helpers if they need those helpers to progress beside fully reserved sessions;
 this implementation does not associate unrelated UI requests with an agent's
 private run envelope. Integrated stress qualification remains required.
+
+### First isolated application trial (2026-10-08)
+
+Normal test-drive startup uses a private home and unique instance. Its managed
+install doctor now recognizes shared CLI shims only when their entrypoint points
+to the selected install store. A foreign host shim cannot make an empty private
+home an incomplete managed install; actual store artifacts still require a valid
+manifest. Six regressions and targeted CLI typechecking passed.
+
+An isolated source server with private PostgreSQL and the existing built UI
+served the dashboard during bounded agent execution without browser page errors.
+All 491 sampled health requests returned 200, with a 718.5 ms maximum. Sampled
+server RSS peaked at 891.9 MiB; the separate server/DB unit peaked at 1271.3 MiB.
+Live service restarts stayed seven. This was not an acceptance pass: the build
+exceeded its subprocess deadline, the constrained run snapshot was not terminal,
+and aggregate worker memory sampling missed slice creation. Smaller VPS support
+and a successful full stress scenario remain unproven. Source UI development
+optimization also exceeded a 1500 MiB startup ceiling; built UI startup succeeded.
