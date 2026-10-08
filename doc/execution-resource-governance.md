@@ -122,7 +122,7 @@ measurement. They are not a minimum-VPS recommendation.
 | `PAPERCLIP_EXECUTION_RESERVE_MIB` | Greater of 1024 MiB and 25% of host RAM |
 | `PAPERCLIP_EXECUTION_CAPACITY_MIB` | Host RAM minus reserve |
 | `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and capacity |
-| `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | 75% of the hard limit |
+| `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | Equal to the hard limit; lower thresholds are opt-in |
 | `PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB` | 0 |
 | `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Up to 2; leave one helper budget when possible, with at least one agent slot |
 | `PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT` | 1 controller helper slot |
@@ -153,8 +153,8 @@ existing audited authority; full detach/reattach qualification is still pending.
 
 The low-memory environment supplies supported defaults for `CARGO_BUILD_JOBS`,
 `CMAKE_BUILD_PARALLEL_LEVEL`, `RAYON_NUM_THREADS`, Go runtime concurrency, and pnpm
-workspace concurrency. `GOMEMLIMIT` defaults to the configured memory-high
-threshold. It is a soft per-runtime GC target, not an RSS or process-tree limit;
+workspace concurrency. `GOMEMLIMIT` defaults to the lesser of the configured
+memory-high threshold and 75% of the hard limit, leaving runtime overhead headroom. It is a soft per-runtime GC target, not an RSS or process-tree limit;
 see the [Go GC guide](https://go.dev/doc/gc-guide#Memory_limit). The pinned
 TypeScript 7 `tsc` launcher executes a native compiler, so Node heap options do
 not govern its memory. Go settings apply generically to Go programs.
@@ -504,3 +504,28 @@ blocker. No compiler setting, dependency map or test exclusion was committed.
 Kernel OOM decisions remained in the owned validation cgroups; control-plane
 OOM counters stayed zero and live service restarts stayed seven. Full checks,
 remaining lifecycle/soft-pressure qualification and internal review remain open.
+
+## Default pressure qualification — 2026-10-08
+
+A real 128 MiB execution with the previous 96 MiB default soft threshold
+remained throttled for 60 seconds without reaching the hard ceiling. A smaller
+above-high allocation completed after 17.7 seconds and recorded 940 high events.
+These anonymous pages cannot be reclaimed sufficiently by the soft threshold;
+this is a poor default for compiler/provider workloads. The default now sets
+`memory.high` equal to `memory.max`. Operators can still configure a lower soft
+threshold after measuring their workload. The identical over-budget scenario
+then reported `oom-kill` in 0.343 seconds at the 128 MiB ceiling, and a subsequent
+execution succeeded in 0.163 seconds. A separate 96 MiB default-boundary regression
+also passed. Go heap headroom remains 25% of the hard limit by default.
+
+Full native executor qualification passed all 521 cases after correcting the
+fixture's binary-resolver mock to follow the earlier production module split.
+The assertions and production resolver behavior are unchanged.
+
+A bounded full-server parse/bind-only diagnostic passed in 9.33 seconds at a
+live sampled 1120.5 MiB peak: 5720 files, 1,655,125 lines and 1,079,780 symbols.
+Its retained heap profile is dominated by AST nodes and binder symbols. This
+shows substantial development compiler baseline cost before semantic checking;
+it does not establish the full check's required envelope or prove a compiler
+leak. Full semantic checking still lacks a passing measured envelope. No larger
+compiler ceiling or smaller production-VPS claim is justified by this result.

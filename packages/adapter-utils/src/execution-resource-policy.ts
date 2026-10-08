@@ -44,7 +44,10 @@ export function resolveExecutionResourcePolicy(
   const reserveBytes = integer(env, "PAPERCLIP_EXECUTION_RESERVE_MIB", Math.ceil(Math.max(GiB, hostMemoryBytes / 4) / MiB)) * MiB;
   const capacityBytes = integer(env, "PAPERCLIP_EXECUTION_CAPACITY_MIB", Math.floor((hostMemoryBytes - reserveBytes) / MiB)) * MiB;
   const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes) / MiB)) * MiB;
-  const memoryHighBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB", Math.floor(memoryMaxBytes * 0.75 / MiB)) * MiB;
+  // A lower memory.high can throttle unreclaimable compiler/provider pages
+  // indefinitely before memory.max is reached. Default to the hard boundary;
+  // operators can opt into a measured lower soft threshold.
+  const memoryHighBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB", memoryMaxBytes / MiB) * MiB;
   const memorySwapMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB", 0, 0) * MiB;
   if (![reserveBytes, capacityBytes, memoryMaxBytes, memoryHighBytes, memorySwapMaxBytes].every(Number.isSafeInteger)
     || !Number.isSafeInteger(hostMemoryBytes) || hostMemoryBytes <= 0
@@ -72,7 +75,7 @@ export function applyLowMemoryEnvironment(env: NodeJS.ProcessEnv, policy: Execut
     CMAKE_BUILD_PARALLEL_LEVEL: jobs,
     RAYON_NUM_THREADS: jobs,
     GOMAXPROCS: jobs,
-    GOMEMLIMIT: `${Math.floor(policy.memoryHighBytes / MiB)}MiB`,
+    GOMEMLIMIT: `${Math.floor(Math.min(policy.memoryHighBytes, policy.memoryMaxBytes * 0.75) / MiB)}MiB`,
     npm_config_workspace_concurrency: jobs,
     ...env,
   };

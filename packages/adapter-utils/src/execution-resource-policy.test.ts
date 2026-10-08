@@ -9,7 +9,7 @@ describe("operator execution resource policy", () => {
     const policy = resolveExecutionResourcePolicy({}, "linux", 8 * GiB);
     expect(policy).toMatchObject({ isolation: "systemd", reserveBytes: 2 * GiB,
       capacityBytes: 6 * GiB, memoryMaxBytes: 2 * GiB,
-      memoryHighBytes: 1.5 * GiB, memorySwapMaxBytes: 0,
+      memoryHighBytes: 2 * GiB, memorySwapMaxBytes: 0,
       maxConcurrent: 2, tasksMax: 128, cpuQuotaPercent: 100, buildJobs: 1 });
   });
 
@@ -23,6 +23,7 @@ describe("operator execution resource policy", () => {
       PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB: "384", PAPERCLIP_EXECUTION_CAPACITY_MIB: "1024",
       PAPERCLIP_EXECUTION_RESERVE_MIB: "1024", PAPERCLIP_EXECUTION_MAX_CONCURRENT: "1" }, "linux", 3 * GiB);
     expect(policy.memoryMaxBytes).toBe(512 * MiB);
+    expect(policy.memoryHighBytes).toBe(384 * MiB);
     expect(policy.capacityBytes).toBe(GiB);
     expect(policy.maxConcurrent).toBe(1);
   });

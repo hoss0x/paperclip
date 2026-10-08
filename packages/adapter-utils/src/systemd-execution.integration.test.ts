@@ -33,6 +33,21 @@ function launch(boundary: SystemdExecutionBoundary, stdin = "") {
 }
 
 (enabled ? describe : describe.skip)("real Linux systemd execution boundary", () => {
+  it("reaches the default hard boundary without indefinite soft throttling", async () => {
+    const defaults = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_MEMORY_MAX_MIB: "96" }, "linux", 8 * 1024 ** 3);
+    const boundary = await prepareSystemdExecution({ runId: randomUUID(), command: process.execPath,
+      args: ["-e", "const buffers=[];setInterval(()=>buffers.push(Buffer.alloc(4*1024*1024,1)),10)"],
+      cwd: process.cwd(), env: { PATH: process.env.PATH }, policy: defaults,
+      scratchDir: process.env.PAPERCLIP_SCRATCH_DIR! });
+    try {
+      await launch(boundary).completed;
+      const evidence = await boundary.finish();
+      expect(evidence.memoryHighBytes).toBe(evidence.memoryMaxBytes);
+      expect(evidence.resourceLimitReached).toBe(true);
+      expect(evidence.result).toBe("oom-kill");
+    } finally { await boundary.finish(); }
+  }, 20_000);
+
   it("preserves stdin, exact environment and literal args in a sibling cgroup", async () => {
     const secret = 'line one\n"quoted" $HOME \\ value';
     const boundary = await prepare(`
