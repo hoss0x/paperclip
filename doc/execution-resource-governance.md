@@ -473,3 +473,15 @@ exceeded its subprocess deadline, the constrained run snapshot was not terminal,
 and aggregate worker memory sampling missed slice creation. Smaller VPS support
 and a successful full stress scenario remain unproven. Source UI development
 optimization also exceeded a 1500 MiB startup ceiling; built UI startup succeeded.
+
+### Corrected hard-limit application trial (2026-10-08)
+
+With the same 1024 MiB worker hard ceiling, MemoryHigh equal to MemoryMax and
+explicit GOMEMLIMIT=600MiB, the adapter-utils build and 22 policy tests passed.
+The allocation workload failed as execution_resource_limit; a later run passed.
+All 97 API samples returned 200. Live sampled worker peaks were 806.6 MiB for
+build/tests and 927.1 MiB for allocation. The kernel OOM decision was confined
+to that allocation unit; server/DB OOM counters stayed zero and live restarts
+stayed seven. These results qualify this hard-limit fixture configuration.
+The default soft threshold, full server compiler, all native/provider lifecycle
+checks, full repository checks and minimum VPS sizes remain unqualified.
