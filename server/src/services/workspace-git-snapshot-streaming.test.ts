@@ -151,12 +151,14 @@ it("streams and stages all four real Git filename lanes above 32 MiB through the
   checkLargeLane(changed.overlayPaths);
   await disposeGitWorkspaceSnapshot(changed);
   await fs.rm(parent, { recursive: true });
+  for (const name of unusual) await fs.rm(path.join(repo, name));
   const deleted = await scan();
   checkLargeLane(deleted.deletedPaths);
   await stage(deleted);
   let remaining = 0;
   for await (const _entry of await fs.opendir(remoteParent)) remaining++;
   expect(remaining).toBe(0);
+  for (const name of unusual) await expect(fs.stat(path.join(remote, name))).rejects.toMatchObject({ code: "ENOENT" });
   expect(commands.every((command) => command.length < 16 * 1024)).toBe(true);
   expect(scheduler.snapshot()).toMatchObject({ activeCount: 0, queuedCount: 0, inFlightCount: 0, cacheBytes: 0 });
 }, realGitTimeoutMs);
