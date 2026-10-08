@@ -11,6 +11,7 @@ export interface ExecutionResourcePolicy {
   capacityBytes: number;
   reserveBytes: number;
   maxConcurrent: number;
+  helperMaxConcurrent?: number;
   cpuQuotaPercent: number;
   tasksMax: number;
   buildJobs: number;
@@ -55,7 +56,8 @@ export function resolveExecutionResourcePolicy(
   return {
     isolation: mode === "none" || (mode === "auto" && platform !== "linux") ? "none" : "systemd",
     reserveBytes, capacityBytes, memoryMaxBytes, memoryHighBytes, memorySwapMaxBytes,
-    maxConcurrent: integer(env, "PAPERCLIP_EXECUTION_MAX_CONCURRENT", Math.min(2, Math.floor(capacityBytes / memoryMaxBytes))),
+    maxConcurrent: integer(env, "PAPERCLIP_EXECUTION_MAX_CONCURRENT", Math.min(2, Math.max(1, Math.floor(capacityBytes / memoryMaxBytes) - 1))),
+    helperMaxConcurrent: integer(env, "PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT", 1),
     cpuQuotaPercent: integer(env, "PAPERCLIP_EXECUTION_CPU_QUOTA_PERCENT", 100),
     tasksMax: integer(env, "PAPERCLIP_EXECUTION_TASKS_MAX", 128),
     buildJobs: integer(env, "PAPERCLIP_EXECUTION_BUILD_JOBS", 1),
@@ -77,6 +79,7 @@ export function applyLowMemoryEnvironment(env: NodeJS.ProcessEnv, policy: Execut
 }
 
 interface PendingAdmission {
+  kind: "agent" | "helper";
   bytes: number;
   resolve: (release: () => void) => void;
   reject: (error: Error) => void;
@@ -84,15 +87,18 @@ interface PendingAdmission {
   abort?: () => void;
 }
 
-/** FIFO, whole-budget reservation. Share one instance across all companies/adapters. */
+/** FIFO per lane, whole-budget reservation. Agents and controller helpers share
+ * byte capacity across every company; each lane has its own bounded slot count. */
 export class ExecutionResourceAdmission {
   #usedBytes = 0;
   #active = 0;
+  #helpers = 0;
   #pending: PendingAdmission[] = [];
 
-  constructor(readonly capacityBytes: number, readonly maxConcurrent: number) {
+  constructor(readonly capacityBytes: number, readonly maxConcurrent: number, readonly helperMaxConcurrent = 1) {
     if (!Number.isSafeInteger(capacityBytes) || capacityBytes < 1
-      || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1) {
+      || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1
+      || !Number.isSafeInteger(helperMaxConcurrent) || helperMaxConcurrent < 1) {
       throw new Error("Execution admission needs positive integer capacity and concurrency");
     }
   }
@@ -104,29 +110,31 @@ export class ExecutionResourceAdmission {
   /** Count already-running OS units before accepting new work after restart.
    * Existing work can exceed a newly reduced slot count; successors then wait.
    */
-  adopt(bytes: number): () => void {
+  adopt(bytes: number, kind: "agent" | "helper" = "agent"): () => void {
     if (!Number.isSafeInteger(bytes) || bytes < 1 || !Number.isSafeInteger(this.#usedBytes + bytes)) {
       throw new Error("Existing execution unit has an invalid memory budget");
     }
     this.#usedBytes += bytes;
     this.#active++;
+    if (kind === "helper") this.#helpers++;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.#usedBytes -= bytes;
       this.#active--;
+      if (kind === "helper") this.#helpers--;
       this.#drain();
     };
   }
 
-  acquire(bytes: number, signal?: AbortSignal): Promise<() => void> {
+  acquire(bytes: number, signal?: AbortSignal, kind: "agent" | "helper" = "agent"): Promise<() => void> {
     if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > this.capacityBytes) {
       return Promise.reject(new Error("Execution budget exceeds admission capacity"));
     }
     if (signal?.aborted) return Promise.reject(new Error("Execution cancelled while queued"));
     return new Promise((resolve, reject) => {
-      const entry: PendingAdmission = { bytes, resolve, reject, signal };
+      const entry: PendingAdmission = { bytes, resolve, reject, signal, kind };
       entry.abort = () => {
         const index = this.#pending.indexOf(entry);
         if (index < 0) return;
@@ -142,19 +150,30 @@ export class ExecutionResourceAdmission {
   }
 
   #drain() {
-    while (this.#pending.length && this.#active < this.maxConcurrent) {
-      const entry = this.#pending[0]!;
-      if (this.#usedBytes + entry.bytes > this.capacityBytes) return;
-      this.#pending.shift();
+    while (this.#pending.length) {
+      // FIFO within each lane. A helper can pass an agent waiting for an agent
+      // slot, but both still reserve bytes from the same aggregate capacity.
+      const seen = new Set<string>();
+      const index = this.#pending.findIndex(entry => {
+        if (seen.has(entry.kind)) return false;
+        seen.add(entry.kind);
+        const available = entry.kind === "helper" ? this.#helpers < this.helperMaxConcurrent
+          : this.#active - this.#helpers < this.maxConcurrent;
+        return available && this.#usedBytes + entry.bytes <= this.capacityBytes;
+      });
+      if (index < 0) return;
+      const entry = this.#pending.splice(index, 1)[0]!;
       entry.signal?.removeEventListener("abort", entry.abort!);
       this.#usedBytes += entry.bytes;
       this.#active++;
+      if (entry.kind === "helper") this.#helpers++;
       let released = false;
       entry.resolve(() => {
         if (released) return;
         released = true;
         this.#usedBytes -= entry.bytes;
         this.#active--;
+        if (entry.kind === "helper") this.#helpers--;
         this.#drain();
       });
     }

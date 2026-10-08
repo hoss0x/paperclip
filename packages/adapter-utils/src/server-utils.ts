@@ -4730,8 +4730,10 @@ export async function runChildProcess(
         let resourceBoundary: SystemdExecutionBoundary | undefined;
         try {
           if (resources?.policy.isolation === "systemd") {
-            release = await (resources.rootAdmission ?? resources.admission).acquire(resources.policy.memoryMaxBytes, resources.signal);
-            resourceBoundary = await prepareSystemdExecution({ runId, command: target.command, args: target.args,
+            release = await (resources.rootAdmission
+              ? resources.rootAdmission.acquire(resources.policy.memoryMaxBytes, resources.signal)
+              : resources.admission.acquire(resources.policy.memoryMaxBytes, resources.signal, resources.admissionKind));
+            resourceBoundary = await prepareSystemdExecution({ runId, admissionKind: resources.admissionKind, command: target.command, args: target.args,
               cwd: target.cwd ?? opts.cwd, env: applyLowMemoryEnvironment({ ...mergedEnv, ...target.env }, resources.policy),
               policy: resources.policy, scratchDir: resources.scratchDir, slice: resources.slice });
             await resources.onUnitPrepared?.({ unit: resourceBoundary.unit, memoryMaxBytes: resources.policy.memoryMaxBytes });

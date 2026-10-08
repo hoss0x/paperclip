@@ -124,14 +124,15 @@ measurement. They are not a minimum-VPS recommendation.
 | `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and capacity |
 | `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | 75% of the hard limit |
 | `PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB` | 0 |
-| `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Lesser of 2 and whole budgets fitting capacity |
+| `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Up to 2; leave one helper budget when possible, with at least one agent slot |
+| `PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT` | 1 controller helper slot |
 | `PAPERCLIP_EXECUTION_CPU_QUOTA_PERCENT` | 100 (one CPU equivalent) |
 | `PAPERCLIP_EXECUTION_TASKS_MAX` | 128 |
 | `PAPERCLIP_EXECUTION_BUILD_JOBS` | 1 |
 
 The resolver rejects malformed numbers, contradictory thresholds, and capacity
 that consumes the reserved host memory. Its admission primitive reserves complete
-hard-memory budgets in FIFO order, checks both memory capacity and concurrency,
+hard-memory budgets in FIFO order within each lane, checks both memory capacity and concurrency,
 and removes cancelled queued requests. Dispatch uses one pool across all companies/adapters in a control-plane process
 and releases capacity after verified cleanup. Initialization counts active units
 in the execution slice before accepting new work. Surviving-unit reservations
@@ -427,3 +428,30 @@ ceiling increase is justified by this result. Full server typecheck and build
 remain open. All sampled health requests were HTTP 200 and the live service
 restart count remained seven; these component checks are not the integrated
 stress benchmark or evidence for a minimum VPS size.
+
+### Separate helper slots with shared memory accounting (2026-10-08)
+
+Controller helpers now use a configurable helper slot count (one by default),
+separate from agent slots. Both lanes reserve full configured memory budgets from
+the same aggregate capacity and enter the same bounded OS slice. A helper can
+pass an agent waiting for an agent slot, but cannot exceed available bytes or
+helper concurrency. FIFO ordering remains within each lane. No extra memory
+capacity is created and no agent reservation is released to admit a helper.
+
+The controller wrapper sets helper classification; command environment and agent
+output cannot select it. Helpers inside an existing shared run envelope continue
+to use that envelope's reservation. Paired transfers can create one helper
+envelope. Controller-created unit and slice names retain their role across
+restart, so reconciliation restores both bytes and the appropriate slot count.
+Older unmarked units are conservatively counted as agent reservations. Run-owned
+unit prefixes and verified cleanup behavior remain unchanged.
+
+The previously failing dependent-helper fixture now completes alongside its
+persistent root with one agent slot and 192 MiB total capacity. Real tests check
+helper cgroup membership, OS role discovery, grouped helper accounting and
+capacity exhaustion. When agents reserve all aggregate bytes, unrelated helpers
+still queue and can time out. Default agent concurrency leaves one full helper budget when capacity permits.
+Explicit concurrency overrides must leave memory capacity for controller
+helpers if they need those helpers to progress beside fully reserved sessions;
+this implementation does not associate unrelated UI requests with an agent's
+private run envelope. Integrated stress qualification remains required.

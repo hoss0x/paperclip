@@ -108,3 +108,57 @@ describe("aggregate execution admission", () => {
     expect(pool.snapshot.queued).toBe(0);
   });
 });
+
+
+describe("controller helper admission", () => {
+  it("lets a helper pass a slot-blocked agent while charging aggregate memory", async () => {
+    const pool = new ExecutionResourceAdmission(200, 1, 1);
+    const agent = await pool.acquire(100);
+    let agentStarted = false;
+    const successor = pool.acquire(100).then(release => { agentStarted = true; return release; });
+    const helper = await pool.acquire(100, undefined, "helper");
+    expect(agentStarted).toBe(false);
+    expect(pool.snapshot).toEqual({ active: 2, usedBytes: 200, queued: 1 });
+    helper(); agent(); (await successor)();
+    expect(pool.snapshot.usedBytes).toBe(0);
+  });
+  it("keeps helper concurrency and memory bounded, with queued cancellation", async () => {
+    const pool = new ExecutionResourceAdmission(200, 1, 1);
+    const first = await pool.acquire(100, undefined, "helper");
+    const controller = new AbortController();
+    const pending = pool.acquire(100, controller.signal, "helper");
+    const cancelled = expect(pending).rejects.toThrow("cancelled while queued");
+    const agent = await pool.acquire(100);
+    expect(pool.snapshot).toEqual({ active: 2, usedBytes: 200, queued: 1 });
+    controller.abort(); await cancelled; first(); agent();
+    const full = await pool.acquire(200);
+    const deadline = new AbortController();
+    const noCapacity = pool.acquire(1, deadline.signal, "helper");
+    const failure = expect(noCapacity).rejects.toThrow("cancelled while queued");
+    expect(pool.snapshot.queued).toBe(1);
+    deadline.abort(); await failure; full();
+  });
+  it("counts adopted helpers in their lane without consuming an agent slot", async () => {
+    const pool = new ExecutionResourceAdmission(200, 1, 1);
+    const survivor = pool.adopt(100, "helper");
+    const agent = await pool.acquire(100);
+    const signal = new AbortController();
+    const pending = pool.acquire(100, signal.signal, "helper");
+    const failure = expect(pending).rejects.toThrow("cancelled while queued");
+    signal.abort(); await failure; survivor(); survivor(); agent();
+    expect(pool.snapshot).toEqual({ active: 0, usedBytes: 0, queued: 0 });
+  });
+  it("validates the operator helper slot setting", () => {
+    expect(resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT: "2" }, "linux", 8 * GiB).helperMaxConcurrent).toBe(2);
+    expect(() => resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT: "0" }, "linux", 8 * GiB)).toThrow();
+  });
+});
+
+
+it("leaves one helper budget in default agent concurrency when capacity permits", () => {
+  const policy = resolveExecutionResourcePolicy({}, "linux", 7933 * MiB);
+  expect(policy.maxConcurrent).toBe(1);
+  expect(policy.capacityBytes - policy.maxConcurrent * policy.memoryMaxBytes).toBeGreaterThanOrEqual(policy.memoryMaxBytes);
+  const small = resolveExecutionResourcePolicy({}, "linux", 2 * GiB);
+  expect(small.maxConcurrent).toBe(1);
+});

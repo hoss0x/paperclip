@@ -46,10 +46,12 @@ async function reserveStdioProcess(input: StdioLaunchInput): Promise<PreparedRes
   const resources = currentExecutionResources();
   if (!resources || resources.policy.isolation !== "systemd") throw new Error("Stdio isolation requires a resource context");
   const cancellationSignal = input.signal && resources.signal ? AbortSignal.any([input.signal, resources.signal]) : input.signal ?? resources.signal;
-  const release = await (resources.rootAdmission ?? resources.admission).acquire(resources.policy.memoryMaxBytes, cancellationSignal);
+  const release = await (resources.rootAdmission
+    ? resources.rootAdmission.acquire(resources.policy.memoryMaxBytes, cancellationSignal)
+    : resources.admission.acquire(resources.policy.memoryMaxBytes, cancellationSignal, resources.admissionKind));
   let boundary: Awaited<ReturnType<typeof prepareSystemdExecution>> | undefined;
   try {
-    boundary = await prepareSystemdExecution({ ...input, policy: resources.policy,
+    boundary = await prepareSystemdExecution({ ...input, admissionKind: resources.admissionKind, policy: resources.policy,
       env: applyLowMemoryEnvironment(input.env, resources.policy), scratchDir: resources.scratchDir, slice: resources.slice });
     await resources.onUnitPrepared?.({ unit: boundary.unit, memoryMaxBytes: resources.policy.memoryMaxBytes });
     if (cancellationSignal?.aborted) throw new Error("Execution cancelled before launch");

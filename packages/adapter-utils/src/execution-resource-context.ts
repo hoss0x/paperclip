@@ -7,6 +7,7 @@ import { listActiveExecutionUnits, reconcileExecutionAdmission } from "./executi
 export interface ExecutionResourceContext {
   /** Controller-owned run identity for helper ownership and restart cleanup. */
   runId?: string;
+  admissionKind?: "agent" | "helper";
   policy: ExecutionResourcePolicy;
   admission: ExecutionResourceAdmission;
   /** Root leases within an already-reserved, bounded run envelope. */
@@ -48,7 +49,7 @@ export async function withOperatorExecutionResources<T>(input: {
     throw new Error("Execution resource policy changed; restart the control plane to apply it safely");
   }
   operatorAdmission ??= { key, initialized: (async () => {
-    const admission = new ExecutionResourceAdmission(policy.capacityBytes, policy.maxConcurrent);
+    const admission = new ExecutionResourceAdmission(policy.capacityBytes, policy.maxConcurrent, policy.helperMaxConcurrent);
     const slice = policy.isolation === "systemd" ? await ensureSystemdExecutionSlice(policy, input.slice) : undefined;
     if (slice) await reconcileExecutionAdmission({ admission, list: () => listActiveExecutionUnits(slice) });
     return { admission, slice };

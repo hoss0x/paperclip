@@ -50,3 +50,19 @@ describe("restart execution admission", () => {
       .rejects.toThrow("unavailable");
   });
 });
+
+
+it("reconciles a surviving helper without hiding its byte reservation", async () => {
+  vi.useFakeTimers();
+  const admission = new ExecutionResourceAdmission(200, 1, 1);
+  const list = vi.fn().mockResolvedValue([{ unit: "helper", memoryMaxBytes: 100, admissionKind: "helper" }]);
+  await reconcileExecutionAdmission({ admission, list });
+  const agent = await admission.acquire(100);
+  const cancellation = new AbortController();
+  const queued = admission.acquire(100, cancellation.signal, "helper");
+  const failure = expect(queued).rejects.toThrow("cancelled while queued");
+  expect(admission.snapshot.usedBytes).toBe(200);
+  cancellation.abort(); await failure; agent();
+  list.mockResolvedValue([]); await vi.advanceTimersByTimeAsync(1_000);
+  expect(admission.snapshot.usedBytes).toBe(0);
+});

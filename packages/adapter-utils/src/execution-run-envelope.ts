@@ -19,8 +19,8 @@ export async function prepareExecutionRunEnvelope(input: { signal?: AbortSignal 
   if (!/^paperclip-[a-zA-Z0-9-]+\.slice$/.test(parent)) throw new Error("Invalid execution parent slice");
   const cancelled = new AbortController();
   const signal = AbortSignal.any([cancelled.signal, ...[input.signal, resources.signal].filter((value): value is AbortSignal => !!value)]);
-  const release = await resources.admission.acquire(resources.policy.memoryMaxBytes, signal);
-  const slice = `${parent.slice(0, -6)}-run${randomUUID().replaceAll("-", "")}.slice`;
+  const release = await resources.admission.acquire(resources.policy.memoryMaxBytes, signal, resources.admissionKind);
+  const slice = `${parent.slice(0, -6)}-run${randomUUID().replaceAll("-", "")}${resources.admissionKind === "helper" ? "helper" : ""}.slice`;
   const policy = resources.policy;
   const ctl = (args: string[]) => execFileAsync("systemctl", ["--user", ...args], { timeout: 5_000 });
   let cgroup: string;

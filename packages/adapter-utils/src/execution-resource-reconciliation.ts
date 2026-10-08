@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import type { ExecutionResourceAdmission } from "./execution-resource-policy.js";
 
 const execFileAsync = promisify(execFile);
-export interface ExistingExecutionUnit { unit: string; memoryMaxBytes: number }
+export interface ExistingExecutionUnit { unit: string; memoryMaxBytes: number; admissionKind?: "agent" | "helper" }
 
 /** User-manager state is authoritative; PID reuse and local process maps are not. */
 export async function listActiveExecutionUnits(slice: string): Promise<ExistingExecutionUnit[]> {
@@ -24,13 +24,14 @@ export async function listActiveExecutionUnits(slice: string): Promise<ExistingE
     if (["inactive", "failed"].includes(values.ActiveState ?? "")) continue;
     const nestedPrefix = `${slice.slice(0, -6)}-run`;
     const nested = values.Slice?.startsWith(nestedPrefix)
-      && /^[a-f0-9]{32}\.slice$/.test(values.Slice.slice(nestedPrefix.length));
+      && /^[a-f0-9]{32}(?:helper)?\.slice$/.test(values.Slice.slice(nestedPrefix.length));
     if (values.Slice !== slice && !nested) continue;
     if (!values.Id || !units.includes(values.Id) || !values.ActiveState) throw new Error("Incomplete execution unit state");
     if (nested) { envelopes.add(values.Slice!); continue; }
     const memoryMaxBytes = Number(values.MemoryMax);
     if (!Number.isSafeInteger(memoryMaxBytes) || memoryMaxBytes < 1) throw new Error("Surviving execution unit has no bounded memory budget");
-    groups.set(values.Id, { unit: values.Id, memoryMaxBytes });
+    groups.set(values.Id, { unit: values.Id, memoryMaxBytes,
+      ...(/-helper\.(?:service|scope)$/.test(values.Id) ? { admissionKind: "helper" as const } : {}) });
   }
   if (envelopes.size) {
     const { stdout: budgets } = await execFileAsync("systemctl", ["--user", "show", ...envelopes,
@@ -41,7 +42,8 @@ export async function listActiveExecutionUnits(slice: string): Promise<ExistingE
       if (!values.Id || !envelopes.has(values.Id) || !Number.isSafeInteger(memoryMaxBytes) || memoryMaxBytes < 1) {
         throw new Error("Surviving execution run envelope has no bounded memory budget");
       }
-      groups.set(values.Id, { unit: values.Id, memoryMaxBytes });
+      groups.set(values.Id, { unit: values.Id, memoryMaxBytes,
+        ...(values.Id.endsWith("helper.slice") ? { admissionKind: "helper" as const } : {}) });
     }
     if ([...envelopes].some(unit => !groups.has(unit))) throw new Error("Incomplete execution run envelope accounting");
   }
@@ -61,7 +63,7 @@ export async function reconcileExecutionAdmission(input: {
   const existing = await input.list();
   for (const unit of existing) {
     if (releases.has(unit.unit)) throw new Error("Duplicate surviving execution unit");
-    releases.set(unit.unit, input.admission.adopt(unit.memoryMaxBytes));
+    releases.set(unit.unit, input.admission.adopt(unit.memoryMaxBytes, unit.admissionKind));
   }
   if (!releases.size) return;
   let refreshing = false;
