@@ -252,7 +252,7 @@ provide an OS memory boundary.
 | `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler now uses a cgroup scope through the shared launcher. UI/API scans install an operator resource context even outside agent dispatch; admission waits count toward the scan deadline. Run-owned scans retain the controller run id for recorded-unit cancellation. Existing scheduler/output/backpressure and Git locking rules remain in place. |
 | `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Shared metadata/bundle helpers now use buffered scopes when a resource context is present. Server workspace Git calls install the operator context, including calls outside dispatch. Server instruction/checkpoint/native workspace preparation and deferred restoration install the operator context. Mandatory writer locks and caller Git environment settings remain unchanged. |
 | `server/services/agent-directory-working-copies.ts` | SSH instruction staging/restoration now installs operator policy independently of dispatch. The shared server target wrapper also covers legacy instruction copies, file-checkpoint transport, and native workspace preparation, including callbacks invoked later outside the original context. |
-| `server/services/native-runtime/native-codex-runner.ts` (`executeNativeCodexRunner`) | An exported older runner entry point still launches directly. Source search found no production caller, only tests; retain this as an explicit compatibility gap until it is governed or removed with evidence. The binary resolver in this module is used in production. |
+| `server/services/native-runtime/native-codex-runner.ts` (`executeNativeCodexRunner`) | The exported compatibility runner now installs operator policy and uses the shared stdio boundary, preserving the actual worker PID, bootstrap environment and session arguments. Completion and shutdown await whole-unit cleanup; admission cancellation releases the prepared coordinator. Source search still found no production caller. |
 
 Generated process-session commands in `execution-target.ts`, the GitHub launcher,
 and the local sandbox network proxy launch children at their execution target.
@@ -305,12 +305,44 @@ loading the native execution and authorized-tool graph for a helper; its old
 export remains available. Focused real tests use a mocked target transport that
 launches actual scoped commands, including deferred restore OOM and recovery.
 They prove the wrapper boundary; separate instruction/checkpoint/native workspace
-regressions cover the actual service call sites. Remote platform probes in the
-adapter registry, provider installation probes, and the older exported native
-runner still need final inventory/qualification before a complete coverage claim.
+regressions cover the actual service call sites. Remote platform shell probes now use the shared server target wrapper. Model
+discovery/refresh/detection and all environment-test route branches install
+operator policy outside dispatch. Native ACPX installation verification opens
+and closes verified descriptor leases without launching a provider. It is not
+an additional child-process path. The older exported native runner is now
+governed; broader native detach/reattach/restart qualification remains open.
 
 A bounded compiler diagnostic excluded 258 colocated server test roots without
 changing the repository configuration. It still approached the existing 2.2 GiB
 validation ceiling and did not finish by the diagnostic deadline. Test inclusion
 alone does not explain the server compiler memory problem. No full server
 compiler pass or low-memory VPS claim follows from this diagnostic.
+
+
+### Discovery and compatibility runner qualification (2026-10-08)
+
+Real systemd fixtures verify registry model listing, refresh and detection outside
+agent dispatch; a 96 MiB discovery OOM is distinct from an ordinary error, and a
+later discovery succeeds. The authenticated environment-test route launches its
+fixture inside a scope, while the saved-agent redacted environment regression
+continues to pass. These cover the server context boundary; external plugins
+that bypass shared launch functions must still implement their own boundary.
+
+The older exported native Codex entry point retains the direct spawn when
+operator isolation is disabled. Under systemd, the shared service boundary
+preserves arguments, bootstrap environment and worker identity. An optional
+AbortSignal cancels queued/running launches. Both graceful shutdown and failure
+wait for descendant cleanup, and memory-limit errors propagate even when the
+provider parser would otherwise fail. A real runner/PostgreSQL vertical slice
+proved durable completion and provider session resume in two separate worker
+cgroups. A separate coordinator fixture proves literal environment preservation,
+detached-descendant cleanup, OOM classification, later recovery, and queued
+cancellation before launch. These do not qualify all native providers or control
+plane restart recovery.
+
+Validation controller units retain finite hard memory, CPU, task and runtime
+limits. The real fixture worker budget was 96 MiB inside the existing 192 MiB
+aggregate validation slice; the live managed installation was not reconfigured.
+Live cgroup samples are retained because systemd exit-time peaks under-report
+these validation units. Full repository checks and the integrated workload
+benchmark remain required before PR readiness or a minimum-VPS recommendation.
