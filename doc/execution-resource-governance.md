@@ -398,3 +398,32 @@ A separate one-checker/single-threaded server compiler diagnostic exceeded
 2,200 MiB. Reducing checker count alone did not resolve compiler pressure. No
 compiler defaults, full-check success, integrated stress result or minimum-VPS
 recommendation follows from this checkpoint.
+
+### Admission review and bounded compatibility checks (2026-10-08)
+
+A real systemd review fixture found a remaining controller-helper admission gap.
+With a 96 MiB persistent root, a 192 MiB aggregate capacity and one global slot,
+a helper invoked through `withHostExecutionResources` in the same context waited
+behind the root until its three-second deadline. It succeeded after the root
+stopped. Thus unused byte capacity alone does not guarantee progress: every
+independent root also consumes a global slot. The existing shared run envelope
+allowed both roots to complete while retaining one reservation and the same run
+ceiling. ACPX already uses that envelope; this fixture does not establish safe
+helper association or lifetime ownership for other retained native sessions.
+Those paths need an explicit fix and regression coverage before stress sign-off.
+Do not bypass admission or increase concurrency to hide the dependency.
+
+The 48 native resume and six handoff compatibility tests passed sequentially in
+a bounded 1,500 MiB validation unit with a 768 MiB Node heap ceiling. These checks
+used their existing fixtures with resource isolation disabled; they supplement
+the previously recorded resource-enabled recovery proof. The broader executor
+suite exceeded the validation unit limit, including an attempt with the same
+Node heap ceiling, so a full lifecycle-suite pass remains unproven.
+
+With about 5.8 GiB host memory available before launch, a separate single-checker,
+single-threaded compiler diagnostic exceeded a 3,500 MiB hard ceiling despite
+Go concurrency and memory controls. Its sampled peak was 3,499.9 MiB. No further
+ceiling increase is justified by this result. Full server typecheck and build
+remain open. All sampled health requests were HTTP 200 and the live service
+restart count remained seven; these component checks are not the integrated
+stress benchmark or evidence for a minimum VPS size.
