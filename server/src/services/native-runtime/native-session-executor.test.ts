@@ -265,7 +265,7 @@ vi.mock("../issue-recovery-actions.js", () => ({
   }),
 }));
 
-vi.mock("./native-codex-runner.js", () => ({
+vi.mock("./runner-binary.js", () => ({
   resolvePaperclipRunnerBinary: state.resolveRunnerBinary,
 }));
 
