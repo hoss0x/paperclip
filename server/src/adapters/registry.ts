@@ -9,7 +9,8 @@ import {
   PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES,
 } from "@paperclipai/adapter-utils";
 import type { AdapterLoginCapability } from "@paperclipai/adapter-utils";
-import { runAdapterExecutionTargetShellCommand } from "@paperclipai/adapter-utils/execution-target";
+import { runAdapterExecutionTargetShellCommand } from "../services/host-execution-target.js";
+import { withHostExecutionResources } from "../services/host-execution-resources.js";
 import {
   execute as claudeExecute,
   listClaudeSkills,
@@ -1079,7 +1080,7 @@ export async function listAdapterModels(type: string): Promise<{ id: string; lab
   // models above and custom adapter discovery remain authoritative.
   if (adapter === codexLocalAdapter) return adapter.models ?? [];
   if (adapter.listModels) {
-    const discovered = await adapter.listModels();
+    const discovered = await withHostExecutionResources(undefined, () => adapter.listModels!());
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];
@@ -1092,11 +1093,11 @@ export async function refreshAdapterModels(type: string): Promise<{ id: string; 
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.refreshModels) {
-    const refreshed = await adapter.refreshModels();
+    const refreshed = await withHostExecutionResources(undefined, () => adapter.refreshModels!());
     if (refreshed.length > 0) return refreshed;
   }
   if (adapter.listModels) {
-    const discovered = await adapter.listModels();
+    const discovered = await withHostExecutionResources(undefined, () => adapter.listModels!());
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];
@@ -1124,7 +1125,7 @@ export async function detectAdapterModel(
 ): Promise<{ model: string; provider: string; source: string; candidates?: string[] } | null> {
   const adapter = findActiveServerAdapter(type);
   if (!adapter?.detectModel) return null;
-  const detected = await adapter.detectModel();
+  const detected = await withHostExecutionResources(undefined, () => adapter.detectModel!());
   if (!detected) return null;
   return {
     model: detected.model,
