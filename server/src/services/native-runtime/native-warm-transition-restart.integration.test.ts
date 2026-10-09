@@ -16,6 +16,7 @@ import {
   companies,
   createDb,
   heartbeatRuns,
+  heartbeatRunEvents,
   issues,
   nativeRunFinalizations,
 } from "@paperclipai/db";
@@ -241,7 +242,7 @@ const cases = [
   ["before-result-routed", "completion_wrong_id"],
   ["before-result-routed", "completion_missing_id"],
   ...(managedFixtureDirectory
-    ? [["managed-before-result-routed", "valid"] as const]
+    ? [["managed-before-result-routed", "valid"] as const, ["managed-before-result-routed", "wrong_scope"] as const]
     : []),
 ] as const;
 
@@ -260,6 +261,11 @@ generated(
         ),
       ) as Fixture;
       expect(fixture.schema).toBe("paperclip.test.warm-transition-fixture.v1");
+      // Scope is part of fixture provenance, not an interchangeable receipt.
+      // General cases exercise transient-origin validation; the managed case
+      // proves its distinct environment lease without using that origin path.
+      expect(fixture.oldIdentity.environmentLeaseId === fixture.oldIdentity.runId)
+        .toBe(!fixtureName.startsWith("managed-"));
       // A later rebuild at the same path must fail here, never rewrite the receipt.
       expect(readRunnerdArtifactBinding(fixture.artifact.path)).toEqual({
         version: fixture.artifact.version,
@@ -471,9 +477,10 @@ generated(
         else expect(claim.kind).toBe("resume_dead_runner");
         if (fault === "wrong_scope" || fault === "wrong_actor") {
           const changed = structuredClone(oldProfile);
-          if (fault === "wrong_scope")
-            changed.nativeExecutionInput.workspace.cwd = "/foreign-workspace";
-          else changed.nativeExecutionInput.binding.agentId = randomUUID();
+          if (fault === "wrong_scope") {
+            if (transient) changed.nativeExecutionInput.workspace.cwd = "/foreign-workspace";
+            else changed.nativeExecutionInput.binding.executionWorkspaceId = randomUUID();
+          } else changed.nativeExecutionInput.binding.agentId = randomUUID();
           await db
             .update(heartbeatRuns)
             .set({ runnerProfileJson: changed })
@@ -823,6 +830,9 @@ generated(
             await db
               .delete(nativeRunFinalizations)
               .where(eq(nativeRunFinalizations.companyId, companyId));
+            await db
+              .delete(heartbeatRunEvents)
+              .where(eq(heartbeatRunEvents.companyId, companyId));
             await db
               .delete(heartbeatRuns)
               .where(eq(heartbeatRuns.companyId, companyId));

@@ -1411,9 +1411,9 @@ export async function syncDirectoryToSsh(input: {
         });
 
         tar.on("error", fail);
-          tar.stdin?.on("error", fail);
+        tar.stdin?.on("error", fail);
         ssh.on("error", fail);
-          ssh.stdin?.on("error", fail);
+        ssh.stdin?.on("error", fail);
         tar.on("close", (code) => {
           tarExited = true;
           tarExitCode = code;

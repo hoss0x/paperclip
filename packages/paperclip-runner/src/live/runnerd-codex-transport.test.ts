@@ -5508,7 +5508,7 @@ it.each([
       commitSpy.mockRestore();
       const fixtureOutput =
         process.env.PAPERCLIP_ATTACH_TRANSITION_FIXTURE_DIRECTORY;
-      if (fixtureOutput && recoveryFault === "none") {
+      if (fixtureOutput && recoveryFault === "none" && !ordinaryFollowup) {
         const retainedArtifact = join(fixtureOutput, "paperclip-runnerd");
         await cp(options.runnerBinary, retainedArtifact, { force: false });
         expect(
