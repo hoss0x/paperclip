@@ -4754,7 +4754,10 @@ export async function runChildProcess(
           resources?.ownership?.assertLaunchAllowed();
           child = spawn(resourceBoundary?.command ?? target.command, resourceBoundary?.args ?? target.args, {
             cwd: target.cwd ?? opts.cwd,
-            env: childEnv,
+            // Connect the boundary client through the operator's user manager.
+            // Provider-specific HOME/DBUS/XDG values belong only to the private
+            // worker invocation, where their exact values remain preserved.
+            env: resourceBoundary ? process.env : childEnv,
             detached: process.platform !== "win32",
             shell: false,
             stdio: [opts.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],

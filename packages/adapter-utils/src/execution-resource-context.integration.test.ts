@@ -28,8 +28,8 @@ function run(script: string, extra: Partial<Parameters<typeof runChildProcess>[3
     const result = await withExecutionResourceContext(resources, () => run(`
       const fs=require('node:fs'); let input=''; process.stdin.setEncoding('utf8');
       process.stdin.on('data', s=>input+=s); process.stdin.on('end',()=>console.log(JSON.stringify({input,
-        pid:process.pid,cgroup:fs.readFileSync('/proc/self/cgroup','utf8'),jobs:process.env.CARGO_BUILD_JOBS,secret:process.env.PRIVATE_VALUE})));`, {
-      stdin: "hello\n", env: { PRIVATE_VALUE: '$HOME "literal"\nvalue' },
+        pid:process.pid,cgroup:fs.readFileSync('/proc/self/cgroup','utf8'),jobs:process.env.CARGO_BUILD_JOBS,secret:process.env.PRIVATE_VALUE, bus:process.env.DBUS_SESSION_BUS_ADDRESS, runtime:process.env.XDG_RUNTIME_DIR})));`, {
+      stdin: "hello\n", env: { PRIVATE_VALUE: '$HOME "literal"\nvalue', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/provider-private-bus', XDG_RUNTIME_DIR: '/provider-private-runtime' },
       onSpawn: async meta => { identity = meta; await new Promise(resolve => setTimeout(resolve, 20)); persisted = true; },
       onLog: async () => { expect(persisted).toBe(true); },
     }));
@@ -38,7 +38,7 @@ function run(script: string, extra: Partial<Parameters<typeof runChildProcess>[3
     expect(identity?.executionUnit).toBe(preparedUnit);
     expect(identity?.pid).toBe(output.pid);
     expect(result.pid).toBe(output.pid);
-    expect(output).toMatchObject({ input: "hello\n", jobs: "1", secret: '$HOME "literal"\nvalue' });
+    expect(output).toMatchObject({ input: "hello\n", jobs: "1", secret: '$HOME "literal"\nvalue', bus: 'unix:path=/provider-private-bus', runtime: '/provider-private-runtime' });
     expect(output.cgroup).toContain(identity?.executionUnit);
     expect(output.cgroup).not.toContain("paperclipai.service");
     expect(resources.admission.snapshot).toEqual({ active: 0, queued: 0, usedBytes: 0 });
