@@ -12,7 +12,7 @@
 // (#13116) -- because nothing enforced it.
 //
 // This derives the required set from esbuild's own module-resolution scan
-// of the two entry points server actually imports (index.js, testing.js),
+// of the entry points server actually imports (index.js, testing.js, live/index.js),
 // with `write: false` so nothing is written to disk and `packages:
 // "external"` so npm imports are reported, not inlined. That is precise:
 // paperclip-runner declares dependencies (react-markdown, the codex/opencode
@@ -33,7 +33,7 @@
 // them working, so this script only verifies; it never restructures.
 
 import { build } from "esbuild";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -45,7 +45,7 @@ const runnerDist = resolve(runnerRoot, "dist");
 // The only entry points server/src actually imports from the vendored
 // runner (server/src/**/*.ts import "../vendor/paperclip-runner/index.js"
 // or ".../testing.js").
-const ENTRY_POINT_NAMES = ["index.js", "testing.js"];
+const ENTRY_POINT_NAMES = ["index.js", "testing.js", "live/index.js"];
 
 const NODE_BUILTINS = new Set([
   ...builtinModules,
@@ -101,6 +101,26 @@ export async function findRunnerExternalPackages(entryPoints) {
   return externalPackageNames;
 }
 
+// Published server code must use its relative vendor boundary. Workspace
+// resolution can hide a direct import of this private, unpublished package.
+export async function verifyServerRunnerBoundary(directory) {
+  const entries = readdirSync(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === "vendor") continue;
+    const filename = resolve(directory, entry.name);
+    if (entry.isDirectory()) await verifyServerRunnerBoundary(filename);
+    else if (entry.name.endsWith(".js")) {
+      const result = await build({ entryPoints: [filename], bundle: false,
+        write: false, metafile: true, platform: "node", format: "esm", logLevel: "silent" });
+      for (const output of Object.values(result.metafile.outputs)) {
+        if (output.imports.some(({ path }) => packageNameFromSpecifier(path) === "@paperclipai/paperclip-runner")) {
+          throw new Error(`Published server module ${filename} imports the private runner package; use the relative vendor boundary.`);
+        }
+      }
+    }
+  }
+}
+
 function readDependencyNames(packageJsonPath) {
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
   return new Map(Object.entries(packageJson.dependencies ?? {}));
@@ -142,4 +162,7 @@ async function main() {
 // Only run when invoked directly (`node scripts/verify-runner-vendor-dependencies.mjs`),
 // not when the vitest suite imports findMissingVendorDependencies for a unit test.
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) await main();
+if (isMain) {
+  if (process.argv.includes("--server-boundary")) await verifyServerRunnerBoundary(resolve(serverRoot, "dist"));
+  else await main();
+}

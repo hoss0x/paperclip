@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   findMissingVendorDependencies,
   findRunnerExternalPackages,
+  verifyServerRunnerBoundary,
 } from "./verify-runner-vendor-dependencies.mjs";
 
 describe("findMissingVendorDependencies", () => {
@@ -85,6 +86,14 @@ describe("findRunnerExternalPackages", () => {
     // dependency the package declares" (which is what made the check
     // over-broad before -- see the module header).
     expect(externalPackageNames).toEqual(new Set(["smol-toml"]));
+  });
+
+  it("rejects private runner imports in compiled server modules", async () => {
+    writeFixture();
+    writeFileSync(join(fixtureDir, "transport.js"), 'import { ProcessCodexAppServerTransport } from "@paperclipai/paperclip-runner"; export const transport = ProcessCodexAppServerTransport;');
+    await expect(verifyServerRunnerBoundary(fixtureDir)).rejects.toThrow(/private runner package/);
+    writeFileSync(join(fixtureDir, "transport.js"), 'export { ProcessCodexAppServerTransport } from "./vendor/paperclip-runner/index.js";');
+    await expect(verifyServerRunnerBoundary(fixtureDir)).resolves.toBeUndefined();
   });
 
   it("throws a clear, actionable error when an entry point is missing", async () => {

@@ -1,3 +1,4 @@
+import { resolveDefaultCapabilityRunnerBinary } from "./runner-binary-layout.js";
 import { isAcpxCanonicalInputMethod } from "../drivers/acpx/profile-extensions.js";
 import { RunnerdTraceFrameIndex } from "./runnerd-trace-frame-index.js";
 import { waitForWarmAttachmentReadiness } from "./warm-attachment-readiness.js";
@@ -83,7 +84,6 @@ import { RUNNERD_CANONICAL_ITEM } from "../drivers/codex/codex-driver-values.js"
 // build artifacts do not. Normalize once so a source build cannot be
 // misclassified as an external provider pack by a string-only comparison.
 const packageRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const MAX_NOTIFICATION_COUNT = 2_048;
 const MAX_NOTIFICATION_BYTES = 4 * 1024 * 1024;
 const RUNNER_CLIENT_VERSION = "0.3.0";
@@ -6713,15 +6713,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
 }
 
 export function defaultCapabilityRunnerdBinary(): string {
-  const staged = resolve(
-    packageRoot,
-    `dist/bin/paperclip-runnerd${executableSuffix}`,
-  );
-  if (existsSync(staged)) return staged;
-  return resolve(
-    packageRoot,
-    `runner/target/debug/paperclip-runnerd${executableSuffix}`,
-  );
+  return resolveDefaultCapabilityRunnerBinary(import.meta.url);
 }
 
 /** Starts an authenticated durable PRP authority, runnerd, and Codex provider transport. */
