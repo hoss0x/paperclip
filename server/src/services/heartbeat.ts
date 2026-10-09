@@ -1,3 +1,4 @@
+import { executeWithResourceGovernance, ExecutionResourceLimitError, stopRecordedLegacyExecutionUnits, resourceSafeAdapterEventType } from "./execution-resources.js";
 import { retryIdempotentDatabaseOperation } from "../database-retry.js";
 import { prepareConnectionInstructionDelivery } from "./connection-instructions.js";
 import { resolveAssignedConnectionInstructionsForRun } from "./native-runtime/assigned-mcp-tools.js";
@@ -15328,6 +15329,7 @@ export function heartbeatService(
             graceMs: Math.max(1, running.graceSec) * 1000,
           });
         }
+        await stopRecordedLegacyExecutionUnits(db, run);
       } finally {
         runningProcesses.delete(run.id);
       }
@@ -19433,12 +19435,15 @@ export function heartbeatService(
       // overlapping provider/tool execution while that child is still alive.
       const checksPersistedChildLiveness =
         currentAdapterTracksLocalChild || run.runtimeMode === "native";
+      const ownedUnitsStopped = run.runtimeMode !== "native"
+        && !readHotRestartAdoptionMetadata(parseObject(run.resultJson))
+        && await stopRecordedLegacyExecutionUnits(db, run);
       const processPidAlive =
-        checksPersistedChildLiveness &&
+        !ownedUnitsStopped && checksPersistedChildLiveness &&
         run.processPid &&
         isProcessAlive(run.processPid);
       const processGroupAlive =
-        checksPersistedChildLiveness &&
+        !ownedUnitsStopped && checksPersistedChildLiveness &&
         run.processGroupId &&
         isProcessGroupAlive(run.processGroupId);
       if (
@@ -23525,7 +23530,7 @@ export function heartbeatService(
           const eventType = event.eventType.trim();
           if (!eventType) return;
           await appendRunEvent(currentRun, {
-            eventType: eventType.slice(0, 120),
+            eventType: resourceSafeAdapterEventType(eventType).slice(0, 120),
             stream: event.stream,
             level: event.level,
             color: event.color,
@@ -24752,8 +24757,17 @@ export function heartbeatService(
             );
             const guardedDispatch =
               await dispatchResolvedInteractionContinuationWithAtomicGate(
-                (markDispatchStarted) =>
-                  executePaperclipNativeSession({
+                async (markDispatchStarted) => {
+                  runScratch ??= await prepareHeartbeatRunScratch({
+                    companyId: agent.companyId, agentId: agent.id, runId: run.id,
+                    issueId: issueRef?.id ?? null, issueIdentifier: issueRef?.identifier ?? null,
+                  });
+                  return executeWithResourceGovernance({
+                    runId: run.id,
+                    scratchDir: runScratch.dir,
+                    signal: executionControl.controller.signal,
+                    record: async event => { await appendRunEvent(run, { ...event, stream: "system", level: "info" }); },
+                  }, () => executePaperclipNativeSession({
                     db,
                     execution: nativeExecution,
                     getFreshSessionHandoff: getNativeFreshSessionHandoff,
@@ -24886,7 +24900,8 @@ export function heartbeatService(
                       markDispatchStarted();
                       await persistRunProcessMetadata(run.id, meta);
                     },
-                  }),
+                  }));
+                },
               );
             if (!guardedDispatch.dispatched) return;
             nativeDispatchStarted = true;
@@ -24975,9 +24990,24 @@ export function heartbeatService(
             }
             const guardedDispatch =
               await dispatchResolvedInteractionContinuationWithAtomicGate(
-                (markDispatchStarted) => {
+                async (markDispatchStarted) => {
                   legacyAdapterEntered = true;
-                  return withAdapterExecutionPhase(executionPhaseContext, "adapter_execution", () => adapter.execute({
+                  runScratch ??= await prepareHeartbeatRunScratch({
+                    companyId: agent.companyId, agentId: agent.id, runId: run.id,
+                    issueId: issueRef?.id ?? null, issueIdentifier: issueRef?.identifier ?? null,
+                  });
+                  return executeWithResourceGovernance({
+                    runId: run.id,
+                    scratchDir: runScratch.dir,
+                    signal: executionControl.controller.signal,
+                    record: async event => { await appendRunEvent(run, { ...event, stream: "system", level: "info" }); },
+                  }, async () => {
+                    await registerAdapterExecutionControl(run.id, executionControl);
+                    const current = await getRun(run.id);
+                    if (!current || isHeartbeatRunTerminalStatus(current.status)) {
+                      executionControl.controller.abort(new Error("Run stopped before provider startup"));
+                    }
+                    return withAdapterExecutionPhase(executionPhaseContext, "adapter_execution", () => adapter.execute({
                     getFreshSessionHandoff,
                     runId: run.id,
                     agent,
@@ -25053,7 +25083,8 @@ export function heartbeatService(
                       });
                     },
                     authToken: authToken ?? undefined,
-                  }));
+                    }));
+                  });
                 },
               );
             if (!guardedDispatch.dispatched) return;
@@ -26174,6 +26205,7 @@ export function heartbeatService(
           })
           .catch(() => null);
         const failureErrorCode =
+          (err instanceof ExecutionResourceLimitError ? err.code : null) ??
           workspaceValidationFailure?.code ??
           configurationIncompleteFailure?.code ??
           nonRetryablePreflightFailureCode(err) ??
@@ -26220,6 +26252,7 @@ export function heartbeatService(
             errorMessage: message,
             resultJson: {
               ...parseObject(stopSnapshot?.resultJson),
+              ...(err instanceof ExecutionResourceLimitError ? { executionResources: err.evidence } : {}),
               ...(workspaceValidationFailure?.resultJson ??
                 configurationIncompleteFailure?.resultJson ??
                 {}),
@@ -29676,6 +29709,7 @@ export function heartbeatService(
                 ),
               });
             }
+            await stopRecordedLegacyExecutionUnits(db, run);
             terminationSettled = true;
           } finally {
             if (
@@ -29889,6 +29923,7 @@ export function heartbeatService(
             graceMs: Math.max(1, running.graceSec) * 1000,
           });
         }
+        await stopRecordedLegacyExecutionUnits(db, run);
         runningProcesses.delete(run.id);
         await releaseIssueExecutionAndPromote(run);
       } finally {

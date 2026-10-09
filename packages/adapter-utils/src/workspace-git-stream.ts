@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { currentExecutionResources, withExecutionResourceContext } from "./execution-resource-context.js";
+import { launchResourceStdioProcess, type ResourceStdioProcess } from "./resource-stdio-process.js";
 import { WORKSPACE_STREAM_CHUNK_BYTES } from "./workspace-manifest.js";
 
 export interface WorkspaceGitProcessInput {
@@ -30,27 +33,58 @@ function signalProcess(child: ChildProcess, signal: NodeJS.Signals): void {
 /** Completion is a barrier for the process, its pipes, and the awaited sink. */
 export async function runWorkspaceGitProcess(input: WorkspaceGitProcessInput): Promise<{ stdout: string; stderr: string }> {
   if (input.signal?.aborted) throw failure("workspace_git_scan_cancelled", "Workspace Git scan was cancelled");
-  const child = spawn(input.gitBinary ?? "git", [...(input.gitArgsPrefix ?? []), "-C", input.cwd, ...input.args], {
+  const resources = currentExecutionResources();
+  const command = input.gitBinary ?? "git";
+  const args = [...(input.gitArgsPrefix ?? []), "-C", input.cwd, ...input.args];
+  const env = { ...(input.env ?? process.env), GIT_OPTIONAL_LOCKS: "0" };
+  let worker: ResourceStdioProcess | undefined;
+  let limited = false;
+  // Admission is part of the scan deadline. Capacity waits must not occupy a
+  // scheduler slot indefinitely, and queued cancellation must never launch.
+  const deadline = new AbortController();
+  const signal = input.signal ? AbortSignal.any([input.signal, deadline.signal]) : deadline.signal;
+  const admissionTimer = setTimeout(() => deadline.abort(), input.timeoutMs);
+  admissionTimer.unref();
+  try {
+    if (resources?.policy.isolation === "systemd") {
+      worker = await withExecutionResourceContext({ ...resources, onEvidence: async evidence => {
+        limited ||= evidence.resourceLimitReached;
+        await resources.onEvidence?.(evidence);
+      } }, () => launchResourceStdioProcess({ runId: resources.runId ?? randomUUID(), command, args, cwd: input.cwd, env,
+        signal, scope: true, nativeLoaderCommand: resources.nativeLoaderCommand?.(),
+        detached: true, allowEarlyExit: true }));
+      worker.child.stdin.end();
+    }
+  } catch (cause) {
+    clearTimeout(admissionTimer);
+    if (limited) throw failure("workspace_git_scan_resource_limit", "Workspace Git scan exceeded its memory resource limit");
+    if (input.signal?.aborted) throw failure("workspace_git_scan_cancelled", "Workspace Git scan was cancelled");
+    if (deadline.signal.aborted) throw failure("workspace_git_scan_timeout", "Workspace Git scan deadline expired during admission");
+    throw cause;
+  }
+  const child = worker?.child ?? spawn(command, args, {
     // Background scans must not compete with real writers by refreshing the
     // index as a side effect. Mandatory locks for writes remain enforced by Git.
-    cwd: input.cwd, env: { ...(input.env ?? process.env), GIT_OPTIONAL_LOCKS: "0" },
+    cwd: input.cwd, env,
     stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true,
   });
   let error: Error | null = null;
   let killTimer: NodeJS.Timeout | undefined;
+  const kill = (signal: NodeJS.Signals) => worker ? worker.signal(signal) : signalProcess(child, signal);
   const terminate = (reason: Error) => {
     if (error) return;
     error = reason;
-    signalProcess(child, "SIGTERM");
-    killTimer = setTimeout(() => signalProcess(child, "SIGKILL"), input.killGraceMs ?? 250);
+    kill("SIGTERM");
+    killTimer = setTimeout(() => kill("SIGKILL"), input.killGraceMs ?? 250);
     killTimer.unref();
   };
   const onAbort = () => terminate(failure("workspace_git_scan_cancelled", "Workspace Git scan was cancelled"));
   input.signal?.addEventListener("abort", onAbort, { once: true });
   if (input.signal?.aborted) onAbort();
-  const timeout = setTimeout(() => terminate(failure("workspace_git_scan_timeout", `Workspace Git scan timed out after ${input.timeoutMs}ms`, { timeoutMs: input.timeoutMs })), input.timeoutMs);
-  timeout.unref();
-  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+  const onDeadline = () => terminate(failure("workspace_git_scan_timeout", `Workspace Git scan timed out after ${input.timeoutMs}ms`, { timeoutMs: input.timeoutMs }));
+  deadline.signal.addEventListener("abort", onDeadline, { once: true });
+  if (deadline.signal.aborted) onDeadline();
+  const closed = worker?.completion ?? new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("error", (cause) => terminate(failure("workspace_git_scan_failed", "Workspace Git scan could not start", { cause: cause.message })));
     child.once("close", (code, signal) => resolve({ code, signal }));
   });
@@ -82,14 +116,16 @@ export async function runWorkspaceGitProcess(input: WorkspaceGitProcessInput): P
     const [outcome, stdout, stderr] = await Promise.all([
       closed, collect(child.stdout!, input.maxStdoutBytes, input.onStdout), collect(child.stderr!, input.maxStderrBytes),
     ]);
+    if (limited) throw failure("workspace_git_scan_resource_limit", "Workspace Git scan exceeded its memory resource limit");
     if (error) throw error;
     if (outcome.code !== 0) throw failure("workspace_git_scan_failed", "Workspace Git scan failed", {
       exitCode: outcome.code, signal: outcome.signal, stderr: stderr.trim().slice(0, 1000),
     });
     return { stdout, stderr };
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(admissionTimer);
     if (killTimer) clearTimeout(killTimer);
     input.signal?.removeEventListener("abort", onAbort);
+    deadline.signal.removeEventListener("abort", onDeadline);
   }
 }

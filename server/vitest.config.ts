@@ -15,6 +15,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Ordinary unit fixtures do not require an OS user manager. Isolation
+    // integration commands explicitly select systemd.
+    env: { PAPERCLIP_EXECUTION_ISOLATION: process.env.PAPERCLIP_EXECUTION_ISOLATION ?? "none" },
     include: ["src/**/*.test.ts", "scripts/**/*.test.mjs"],
     // Each server suite boots + tears down its own embedded Postgres in
     // beforeAll/afterAll. Under the loaded serial shard (maxWorkers=1) the

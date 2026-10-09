@@ -16125,69 +16125,76 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
       publicBaseUrl: "https://paperclip.example",
       runtime: new FakeChatSdkRuntime() as unknown as ChatSdkRuntime,
     });
-    deferred.shift()?.();
-    // Simulate another server process reconciling the same durable rows at
-    // the same time as the webhook process's deferred drain.
-    await competingService.processPendingDeliveries();
-    await vi.waitFor(async () => {
-      const rows = await db
+    try {
+      deferred.shift()?.();
+      // Simulate another server process reconciling the same durable rows at
+      // the same time as the webhook process's deferred drain.
+      await competingService.processPendingDeliveries();
+      await vi.waitFor(async () => {
+        const rows = await db
+          .select()
+          .from(chatConversations)
+          .where(eq(chatConversations.endpointId, endpoint.id));
+        expect(rows).toHaveLength(1);
+      }, { timeout: 10_000 });
+      const [conversation] = await db
         .select()
         .from(chatConversations)
         .where(eq(chatConversations.endpointId, endpoint.id));
-      expect(rows).toHaveLength(1);
-    });
-    const [conversation] = await db
-      .select()
-      .from(chatConversations)
-      .where(eq(chatConversations.endpointId, endpoint.id));
-    await vi.waitFor(async () => {
-      const rows = await db
-        .select({ id: issueComments.id })
+      await vi.waitFor(async () => {
+        const rows = await db
+          .select({ id: issueComments.id })
+          .from(issueComments)
+          .where(eq(issueComments.issueId, conversation.issueId));
+        expect(rows).toHaveLength(8);
+      }, { timeout: 10_000 });
+      const comments = await db
+        .select({ id: issueComments.id, body: issueComments.body })
         .from(issueComments)
-        .where(eq(issueComments.issueId, conversation.issueId));
-      expect(rows).toHaveLength(8);
-    });
-    const comments = await db
-      .select({ id: issueComments.id, body: issueComments.body })
-      .from(issueComments)
-      .where(eq(issueComments.issueId, conversation.issueId))
-      .orderBy(asc(issueComments.createdAt), asc(issueComments.id));
-    expect(comments.map((comment) => comment.body)).toEqual([
-      "@maya acknowledge quickly",
-      "follow-up 3",
-      "follow-up 4",
-      "follow-up 5",
-      "and include the rollback status",
-      "follow-up 6",
-      "follow-up 7",
-      "follow-up 8",
-    ]);
-    // Comment admission commits before the durable wake. Wait for this
-    // company's last wake too, not merely its already-visible last comment.
-    // The competing sweep may legitimately reconcile another fixture company.
-    await vi.waitFor(() => {
-      const calls = wakeup.mock.calls.filter(
-        (call) => call[0] === fixture.assignedAgentId,
-      );
-      expect(calls).toHaveLength(8);
-      expect(calls.map((call) => call[1]?.payload?.wakeCommentId)).toEqual(
-        comments.map((comment) => comment.id),
-      );
-    });
-    // The last comment and wakeup commit inside the lease. Under full-suite
-    // load the assertions above can observe those effects one microtask before
-    // the deferred owner's `finally` deletes its lease. Require prompt eventual
-    // release; a real leak would remain for the much longer lease TTL.
-    await vi.waitFor(async () => {
-      expect(
-        await db
-          .select()
-          .from(chatEndpointLeases)
-          .where(eq(chatEndpointLeases.endpointId, endpoint.id)),
-      ).toHaveLength(0);
-    });
-    await competingService.shutdown();
-    await service.shutdown();
+        .where(eq(issueComments.issueId, conversation.issueId))
+        .orderBy(asc(issueComments.createdAt), asc(issueComments.id));
+      expect(comments.map((comment) => comment.body)).toEqual([
+        "@maya acknowledge quickly",
+        "follow-up 3",
+        "follow-up 4",
+        "follow-up 5",
+        "and include the rollback status",
+        "follow-up 6",
+        "follow-up 7",
+        "follow-up 8",
+      ]);
+      // A durable drain performs multiple database transactions per message.
+      // Vitest defaults to a one-second wait, which is too short under bounded
+      // CPU or a loaded suite. Keep every ordering assertion and allow the drain
+      // to finish before fixture teardown invalidates its authorization.
+      // Comment admission commits before the durable wake. Wait for this
+      // company's last wake too, not merely its already-visible last comment.
+      // The competing sweep may legitimately reconcile another fixture company.
+      await vi.waitFor(() => {
+        const calls = wakeup.mock.calls.filter(
+          (call) => call[0] === fixture.assignedAgentId,
+        );
+        expect(calls).toHaveLength(8);
+        expect(calls.map((call) => call[1]?.payload?.wakeCommentId)).toEqual(
+          comments.map((comment) => comment.id),
+        );
+      }, { timeout: 10_000 });
+      // The last comment and wakeup commit inside the lease. Under full-suite
+      // load the assertions above can observe those effects one microtask before
+      // the deferred owner's `finally` deletes its lease. Require prompt eventual
+      // release; a real leak would remain for the much longer lease TTL.
+      await vi.waitFor(async () => {
+        expect(
+          await db
+            .select()
+            .from(chatEndpointLeases)
+            .where(eq(chatEndpointLeases.endpointId, endpoint.id)),
+        ).toHaveLength(0);
+      }, { timeout: 10_000 });
+    } finally {
+      await competingService.shutdown();
+      await service.shutdown();
+    }
   });
 
   it("stops a conversation drain after its lease renewal fails", async () => {

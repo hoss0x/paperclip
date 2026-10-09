@@ -195,6 +195,45 @@ afterEach(async () => {
 });
 
 describe("ACPX runtime host", () => {
+  it("keeps credentials fenced after resource cleanup failure and retries the same owner", async () => {
+    const fixture = await hostFixture();
+    const resourceClose = vi.fn(async () => {}).mockRejectedValueOnce(new Error("unit cleanup not confirmed"));
+    const host = await AcpxRuntimeHost.open({ ...fixture.options, agent: "codex", model: "gpt-5.6-sol",
+      permissionMode: "approve-all", environment: { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: "{}" },
+      prepareCommandResources: async () => ({ openCommand: installation => installation.openCommand(), close: resourceClose }),
+    }, fixture.dependencies({ openRuntime: async () => runtimePort() }));
+    const credentialHome = join(host.runtimeRoot(), "codex-home");
+    const authPath = join(credentialHome, "auth.json");
+    await expect(host.close({ reason: "cleanup failure" })).rejects.toThrow();
+    await expect(readFile(authPath, "utf8")).resolves.toBe("{}");
+    await expect(stageManagedCodexCredential({ agentHomeDirectory: credentialHome,
+      environment: { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: '{"owner":"contender"}' },
+    })).rejects.toThrow("already has an active lease");
+    await host.close({ reason: "retry cleanup" });
+    expect(resourceClose).toHaveBeenCalledTimes(2);
+    expect(fixture.commandClose).toHaveBeenCalledOnce();
+    await expect(readFile(authPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("retains credentials until bounded command resources finish cleanup", async () => {
+    const fixture = await hostFixture();
+    const shutdown = deferred<void>();
+    const resourceClose = vi.fn(() => shutdown.promise);
+    const host = await AcpxRuntimeHost.open({ ...fixture.options, agent: "codex", model: "gpt-5.6-sol",
+      permissionMode: "approve-all", environment: { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: "{}" },
+      prepareCommandResources: async () => ({ openCommand: installation => installation.openCommand(), close: resourceClose }),
+    }, fixture.dependencies({ openRuntime: async () => runtimePort() }));
+    const credentialHome = join(host.runtimeRoot(), "codex-home");
+    const authPath = join(credentialHome, "auth.json");
+    const closing = host.close({ reason: "bounded resource cleanup pending" });
+    try {
+      await waitForAcpxOperation(() => expect(resourceClose).toHaveBeenCalledOnce());
+      await expect(readFile(authPath, "utf8")).resolves.toBe("{}");
+      await expect(stageManagedCodexCredential({ agentHomeDirectory: credentialHome,
+        environment: { PAPERCLIP_ACPX_CODEX_AUTH_JSON_SECRET: '{"owner":"contender"}' },
+      })).rejects.toThrow("already has an active lease");
+    } finally { shutdown.resolve(); await closing; }
+    await expect(readFile(authPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it.each([
     { PAPERCLIP_NATIVE_MCP_NAME: "paperclip-assigned" },
     { PAPERCLIP_NATIVE_MCP_NAME: "paperclip", PAPERCLIP_NATIVE_MCP_URL: "http://127.0.0.1:3211/mcp", PAPERCLIP_NATIVE_MCP_TOKEN: "x".repeat(40) },

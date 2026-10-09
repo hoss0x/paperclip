@@ -1,4 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { currentExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import { launchResourceStdioProcess, type ResourceStdioProcess } from "@paperclipai/adapter-utils/resource-stdio-process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +14,7 @@ import {
 const CODEX_USAGE_SOURCE_RPC = "codex-rpc";
 const CODEX_USAGE_SOURCE_WHAM = "codex-wham";
 const MAX_QUOTA_ERROR_BODY_BYTES = 4_000;
+const MAX_QUOTA_RPC_LINE_BYTES = 1024 * 1024;
 
 export function codexHomeDir(): string {
   const fromEnv = process.env.CODEX_HOME;
@@ -468,23 +472,29 @@ type PendingRequest = {
 };
 
 class CodexRpcClient {
-  private proc = spawn(
-    "codex",
-    ["-s", "read-only", "-a", "untrusted", "app-server"],
-    { stdio: ["pipe", "pipe", "pipe"], env: process.env },
-  );
+  static async open(): Promise<CodexRpcClient> {
+    const args = ["-s", "read-only", "-a", "untrusted", "app-server"];
+    if (currentExecutionResources()?.policy.isolation === "systemd") {
+      const owned = await launchResourceStdioProcess({
+        runId: `quota-${randomUUID()}`, command: "codex", args,
+        cwd: process.cwd(), env: process.env,
+      });
+      return new CodexRpcClient(owned.child, owned);
+    }
+    return new CodexRpcClient(spawn("codex", args, { stdio: ["pipe", "pipe", "pipe"], env: process.env }));
+  }
 
   private nextId = 1;
   private buffer = "";
   private pending = new Map<number, PendingRequest>();
   private stderr = "";
 
-  constructor() {
+  private constructor(private readonly proc: ChildProcessWithoutNullStreams, private readonly owned?: ResourceStdioProcess) {
     this.proc.stdout.setEncoding("utf8");
     this.proc.stderr.setEncoding("utf8");
     this.proc.stdout.on("data", (chunk: string) => this.onStdout(chunk));
     this.proc.stderr.on("data", (chunk: string) => {
-      this.stderr += chunk;
+      this.stderr = (this.stderr + chunk).slice(-MAX_QUOTA_ERROR_BODY_BYTES);
     });
     this.proc.on("exit", () => {
       for (const request of this.pending.values()) {
@@ -504,6 +514,12 @@ class CodexRpcClient {
 
   private onStdout(chunk: string) {
     this.buffer += chunk;
+    if (Buffer.byteLength(this.buffer) > MAX_QUOTA_RPC_LINE_BYTES) {
+      this.buffer = "";
+      this.stderr = "Codex quota response exceeded its output limit";
+      if (this.owned) this.owned.signal("SIGKILL"); else this.proc.kill("SIGKILL");
+      return;
+    }
     while (true) {
       const newlineIndex = this.buffer.indexOf("\n");
       if (newlineIndex < 0) break;
@@ -568,12 +584,15 @@ class CodexRpcClient {
   }
 
   async shutdown() {
-    this.proc.kill("SIGTERM");
+    if (!this.owned) { this.proc.kill("SIGTERM"); return; }
+    this.owned.signal("SIGTERM");
+    const escalation = setTimeout(() => this.owned!.signal("SIGKILL"), 1_000);
+    try { await this.owned.completion; } finally { clearTimeout(escalation); }
   }
 }
 
 export async function fetchCodexRpcQuota(): Promise<CodexRpcQuotaSnapshot> {
-  const client = new CodexRpcClient();
+  const client = await CodexRpcClient.open();
   try {
     await client.initialize();
     const [limits, account] = await Promise.all([

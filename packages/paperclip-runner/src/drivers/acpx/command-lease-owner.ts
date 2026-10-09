@@ -10,26 +10,30 @@ export function createAcpxCommandLeaseOwner(
   let consumed = false;
   let closing = false;
   let refresh: Promise<void> | null = null;
+  let cleanup: Promise<void> | null = null;
   const command: VerifiedAcpxCommandLease = {
     spawn(...args) {
       if (closing) throw new Error("Verified ACPX command owner is closing");
       consumed = true;
       return current.spawn(...args);
     },
-    async close() {
+    close() {
       closing = true;
-      // Late acquisitions remain owned. Retry every lease whose close fails.
-      await refresh?.catch(() => undefined);
-      const failures: unknown[] = [];
-      for (const lease of leases) {
-        try {
-          await lease.close();
-          leases.delete(lease);
-        } catch (error) {
-          failures.push(error);
+      return cleanup ??= (async () => {
+        // Concurrent abort/runtime paths share this attempt; later calls retry
+        // only leases whose cleanup failed, including late refresh acquisitions.
+        await refresh?.catch(() => undefined);
+        const failures: unknown[] = [];
+        for (const lease of leases) {
+          try {
+            await lease.close();
+            leases.delete(lease);
+          } catch (error) {
+            failures.push(error);
+          }
         }
-      }
-      if (failures.length) throw new AggregateError(failures, "ACPX command leases did not close");
+        if (failures.length) throw new AggregateError(failures, "ACPX command leases did not close");
+      })().finally(() => { cleanup = null; });
     },
   };
   return {

@@ -1257,6 +1257,8 @@ export interface CapabilityRunnerdCodexTransportOptions {
     startedAt: string;
     isAlive: () => Promise<boolean> | boolean;
     signal?: (signal: NodeJS.Signals) => Promise<boolean> | boolean;
+    /** Whole-unit containment captured by the controller from durable ownership. */
+    cleanup?: () => Promise<void>;
   };
 }
 
@@ -3352,7 +3354,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   readonly #root: string;
   readonly #ownsRoot: boolean;
   readonly #queue = new NotificationQueue();
-  readonly #startedAt = new Date().toISOString();
+  #startedAt = new Date().toISOString();
   readonly #evidence: CapabilityRunnerdProcessEvidence;
   #handler: CodexServerRequestHandler = async () => ({
     success: false,
@@ -3995,10 +3997,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   }
 
   async #publishSpawnedProcess(handle: RunnerProcessHandle): Promise<void> {
-    this.#evidence.runnerPid = handle.child.pid ?? null;
-    this.#evidence.runnerProcessGroupId = handle.processGroupId ?? null;
+    const identity = await handle.ready;
+    this.#startedAt = identity?.startedAt ?? handle.startedAt ?? this.#startedAt;
+    this.#evidence.runnerPid = identity?.pid ?? handle.child.pid ?? null;
+    this.#evidence.runnerProcessGroupId = identity ? identity.processGroupId : handle.processGroupId ?? null;
     this.#publish();
-    if (handle.child.pid !== undefined) {
+    if (handle.child.pid !== undefined && !identity?.ownershipRecorded) {
       await this.options.onSpawn?.({
         pid: handle.child.pid,
         processGroupId: handle.processGroupId ?? null,
@@ -4336,6 +4340,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
             ? null
             : this.#controlPlaneCheckpoint,
         forceKill: async () => {
+          if (adoptedRunner && this.#adoptedRunnerAuthenticated) {
+            await adoptedRunner.cleanup?.();
+          }
           const handle = this.#handle;
           if (!handle || this.#evidence.runnerExited) return;
           handle.child.kill("SIGKILL");

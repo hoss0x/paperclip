@@ -115,6 +115,30 @@ class WarmAttachTransport extends FakeCodexTransport {
 }
 
 describe("Codex app-server Codex driver", () => {
+  it("forwards cancellation to asynchronous process admission before provider requests", async () => {
+    const controller = new AbortController();
+    const reason = new Error("queued native startup cancelled");
+    let factoryEntered!: () => void;
+    const entered = new Promise<void>(resolve => { factoryEntered = resolve; });
+    const driver = new CodexAppServerDriver({
+      taskEnvelope: envelope,
+      processTransportFactory: async options => {
+        expect(options.launchSignal).toBe(controller.signal);
+        expect(options.workingDirectory).toBe(WORKSPACE);
+        factoryEntered();
+        return new Promise((_resolve, reject) => {
+          options.launchSignal!.addEventListener("abort", () => reject(options.launchSignal!.reason), { once: true });
+        });
+      },
+    });
+    const opened = driver.openSession({ runId: "queued-resource-run", normalizedSessionId: "queued-resource-session",
+      workingDirectory: WORKSPACE, signal: controller.signal });
+    const failed = expect(opened).rejects.toBe(reason);
+    await entered;
+    controller.abort(reason);
+    await failed;
+  });
+
   it("accepts runner-proven warm attachment when the host active-turn reducer is stale", async () => {
     const transport = new WarmAttachTransport();
     const driver = makeDriver([transport]);

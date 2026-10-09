@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import request from "supertest";
@@ -240,6 +241,31 @@ async function unregisterTestAdapter(type: string) {
 }
 
 describe("agent routes adapter validation", () => {
+  (process.env.PAPERCLIP_TEST_SYSTEMD === "1" ? it : it.skip)("contains installation probes through the authenticated route", async () => {
+    let observed = "";
+    const { registerServerAdapter } = await import("../adapters/index.js");
+    registerServerAdapter({ ...externalAdapter, testEnvironment: async context => {
+      // resetModules creates a fresh AsyncLocalStorage instance for the route.
+      const { currentExecutionResources } = await import("@paperclipai/adapter-utils/execution-resource-context");
+      const { execFileWithResources } = await import("@paperclipai/adapter-utils/resource-buffered-command");
+      expect(context.companyId).toBe("company-1");
+      expect(currentExecutionResources()?.policy.isolation).toBe("systemd");
+      const result = await execFileWithResources(process.execPath, ["-e", "console.log(require('fs').readFileSync('/proc/self/cgroup','utf8'))"], {
+        timeout: 5000, maxBuffer: 4096,
+      });
+      observed = result.stdout;
+      return { adapterType: "external_test", status: "pass", checks: [], testedAt: new Date().toISOString() };
+    } });
+    const app = await createApp();
+    const response = await requestApp(app, baseUrl => request(baseUrl)
+      .post("/api/companies/company-1/adapters/external_test/test-environment").send({ adapterConfig: {} }));
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(response.body.status).toBe("pass");
+    expect(observed).toContain(".scope");
+    expect(observed).not.toContain("paperclipai.service");
+    await fs.writeFile(path.join(process.env.PAPERCLIP_SCRATCH_DIR!, "installation-probe-identity.txt"), observed);
+  }, 35_000);
+
   beforeEach(async () => {
     vi.resetModules();
     vi.doUnmock("../routes/agents.js");

@@ -166,7 +166,9 @@ export function executionWorkspaceRoutes(db: Db, opts: { pluginWorkerManager?: P
     const workspace = await getAccessibleResource(req, res, svc.getById(id), "Execution workspace not found");
     if (!workspace) return;
     if (!(await assertExecutionWorkspaceReadAllowed(req, res, workspace.companyId))) return;
-    const readiness = await svc.getCloseReadiness(id);
+    // The access read above already hydrates Git state. Reuse that display
+    // inspection here; archive/cleanup callers keep the default fresh check.
+    const readiness = await svc.getCloseReadiness(id, { forDisplay: true });
     if (!readiness) {
       res.status(404).json({ error: "Execution workspace not found" });
       return;

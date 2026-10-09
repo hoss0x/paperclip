@@ -1,3 +1,6 @@
+import { withResourceTransferGroup } from "./resource-transfer-group.js";
+import { execFileWithResources } from "./resource-buffered-command.js";
+import { currentExecutionResources } from "./execution-resource-context.js";
 import { randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { constants as fsConstants, createReadStream, createWriteStream, promises as fs } from "node:fs";
@@ -197,26 +200,7 @@ async function execFileText(
     maxBuffer?: number;
   } = {},
 ): Promise<SshCommandResult> {
-  return await new Promise<SshCommandResult>((resolve, reject) => {
-    execFile(
-      file,
-      args,
-      {
-        timeout: options.timeout ?? 15_000,
-        maxBuffer: options.maxBuffer ?? 1024 * 128,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(Object.assign(error, { stdout: stdout ?? "", stderr: stderr ?? "" }));
-          return;
-        }
-        resolve({
-          stdout: stdout ?? "",
-          stderr: stderr ?? "",
-        });
-      },
-    );
-  });
+  return execFileWithResources(file, args, options);
 }
 
 async function spawnText(
@@ -228,6 +212,9 @@ async function spawnText(
     maxBuffer?: number;
   } = {},
 ): Promise<SshCommandResult> {
+  if (currentExecutionResources()?.policy.isolation === "systemd") {
+    return execFileWithResources(file, args, options);
+  }
   return await new Promise<SshCommandResult>((resolve, reject) => {
     const child = spawn(file, args, {
       stdio: [options.stdin != null ? "pipe" : "ignore", "pipe", "pipe"],
@@ -662,42 +649,45 @@ async function streamLocalFileToSsh(input: {
     `sh -c ${shellQuote(input.remoteScript)}`,
   ];
 
-  await new Promise<void>((resolve, reject) => {
-    const source = createReadStream(input.localFile);
-    const ssh = spawn("ssh", sshArgs, {
+  await withResourceTransferGroup(async spawnProcess => {
+    const ssh = await spawnProcess("ssh", sshArgs, {
       stdio: ["pipe", "ignore", "pipe"],
     });
+    await new Promise<void>((resolve, reject) => {
+      const source = createReadStream(input.localFile);
 
-    let sshStderr = "";
-    let settled = false;
+      let sshStderr = "";
+      let settled = false;
 
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      source.destroy();
-      ssh.kill("SIGTERM");
-      reject(error);
-    };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        source.destroy();
+        ssh.kill("SIGTERM");
+        reject(error);
+      };
 
-    ssh.stderr?.on("data", (chunk) => {
-      sshStderr += String(chunk);
-    });
-    source.on("error", fail);
-    ssh.on("error", fail);
-    if (input.progress) {
-      input.progress.counter.on("error", fail);
-      source.pipe(input.progress.counter).pipe(ssh.stdin ?? null);
-    } else {
-      source.pipe(ssh.stdin ?? null);
-    }
-    ssh.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      if ((code ?? 0) !== 0) {
-        reject(new Error(sshStderr.trim() || `ssh exited with code ${code ?? -1}`));
-        return;
+      ssh.stderr?.on("data", (chunk) => {
+        sshStderr = (sshStderr + String(chunk)).slice(-128 * 1024);
+      });
+      source.on("error", fail);
+      ssh.on("error", fail);
+      ssh.stdin?.on("error", fail);
+      if (input.progress) {
+        input.progress.counter.on("error", fail);
+        source.pipe(input.progress.counter).pipe(ssh.stdin!);
+      } else {
+        source.pipe(ssh.stdin!);
       }
-      resolve();
+      ssh.on("close", (code) => {
+        if (settled) return;
+        settled = true;
+        if ((code ?? 0) !== 0) {
+          reject(new Error(sshStderr.trim() || `ssh exited with code ${code ?? -1}`));
+          return;
+        }
+        resolve();
+      });
     });
   }).finally(auth.cleanup);
 }
@@ -717,43 +707,46 @@ async function streamSshToLocalFile(input: {
     `sh -c ${shellQuote(input.remoteScript)}`,
   ];
 
-  await new Promise<void>((resolve, reject) => {
-    const ssh = spawn("ssh", sshArgs, {
+  await withResourceTransferGroup(async spawnProcess => {
+    const ssh = await spawnProcess("ssh", sshArgs, {
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const sink = createWriteStream(input.localFile, { mode: 0o600 });
+    await new Promise<void>((resolve, reject) => {
+      const sink = createWriteStream(input.localFile, { mode: 0o600 });
 
-    let sshStderr = "";
-    let settled = false;
+      let sshStderr = "";
+      let settled = false;
 
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      ssh.kill("SIGTERM");
-      sink.destroy();
-      reject(error);
-    };
-
-    if (input.progress) {
-      input.progress.counter.on("error", fail);
-      ssh.stdout?.pipe(input.progress.counter).pipe(sink);
-    } else {
-      ssh.stdout?.pipe(sink);
-    }
-    ssh.stderr?.on("data", (chunk) => {
-      sshStderr += String(chunk);
-    });
-    ssh.on("error", fail);
-    sink.on("error", fail);
-    ssh.on("close", (code) => {
-      sink.end(() => {
+      const fail = (error: Error) => {
         if (settled) return;
         settled = true;
-        if ((code ?? 0) !== 0) {
-          reject(new Error(sshStderr.trim() || `ssh exited with code ${code ?? -1}`));
-          return;
-        }
-        resolve();
+        ssh.kill("SIGTERM");
+        sink.destroy();
+        reject(error);
+      };
+
+      if (input.progress) {
+        input.progress.counter.on("error", fail);
+        ssh.stdout?.pipe(input.progress.counter).pipe(sink);
+      } else {
+        ssh.stdout?.pipe(sink);
+      }
+      ssh.stderr?.on("data", (chunk) => {
+        sshStderr = (sshStderr + String(chunk)).slice(-128 * 1024);
+      });
+      ssh.on("error", fail);
+      ssh.stdin?.on("error", fail);
+      sink.on("error", fail);
+      ssh.on("close", (code) => {
+        sink.end(() => {
+          if (settled) return;
+          settled = true;
+          if ((code ?? 0) !== 0) {
+            reject(new Error(sshStderr.trim() || `ssh exited with code ${code ?? -1}`));
+            return;
+          }
+          resolve();
+        });
       });
     });
   }).finally(auth.cleanup);
@@ -1351,83 +1344,87 @@ export async function syncDirectoryToSsh(input: {
     : null;
 
   try {
-    await new Promise<void>((resolve, reject) => {
-    const tarArgs = [
-      ...(input.followSymlinks ? ["-h"] : []),
-      "-C",
-      input.localDir,
-      ...tarExcludeArgs(input.exclude),
-      "-cf",
-      "-",
-      ".",
-    ];
-    const tar = spawn("tar", tarArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: tarSpawnEnv(),
-    });
-    const ssh = spawn("ssh", sshArgs, {
-      stdio: ["pipe", "ignore", "pipe"],
-    });
+    await withResourceTransferGroup(async spawnProcess => {
+      const tarArgs = [
+        ...(input.followSymlinks ? ["-h"] : []),
+        "-C",
+        input.localDir,
+        ...tarExcludeArgs(input.exclude),
+        "-cf",
+        "-",
+        ".",
+      ];
+      const tar = await spawnProcess("tar", tarArgs, {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: tarSpawnEnv(),
+      });
+      const ssh = await spawnProcess("ssh", sshArgs, {
+        stdio: ["pipe", "ignore", "pipe"],
+      });
+      await new Promise<void>((resolve, reject) => {
 
-    let tarStderr = "";
-    let sshStderr = "";
-    let settled = false;
-    let tarExited = false;
-    let sshExited = false;
-    let tarExitCode: number | null = null;
-    let sshExitCode: number | null = null;
+        let tarStderr = "";
+        let sshStderr = "";
+        let settled = false;
+        let tarExited = false;
+        let sshExited = false;
+        let tarExitCode: number | null = null;
+        let sshExitCode: number | null = null;
 
-    const maybeFinish = () => {
-      if (settled || !tarExited || !sshExited) {
-        return;
-      }
-      settled = true;
-      if ((tarExitCode ?? 0) !== 0) {
-        reject(new Error(tarStderr.trim() || `tar exited with code ${tarExitCode ?? -1}`));
-        return;
-      }
-      if ((sshExitCode ?? 0) !== 0) {
-        reject(new Error(sshStderr.trim() || `ssh exited with code ${sshExitCode ?? -1}`));
-        return;
-      }
-      resolve();
-    };
+        const maybeFinish = () => {
+          if (settled || !tarExited || !sshExited) {
+            return;
+          }
+          settled = true;
+          if ((tarExitCode ?? 0) !== 0) {
+            reject(new Error(tarStderr.trim() || `tar exited with code ${tarExitCode ?? -1}`));
+            return;
+          }
+          if ((sshExitCode ?? 0) !== 0) {
+            reject(new Error(sshStderr.trim() || `ssh exited with code ${sshExitCode ?? -1}`));
+            return;
+          }
+          resolve();
+        };
 
-    const fail = (error: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      tar.kill("SIGTERM");
-      ssh.kill("SIGTERM");
-      reject(error);
-    };
+        const fail = (error: Error) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          tar.kill("SIGTERM");
+          ssh.kill("SIGTERM");
+          reject(error);
+        };
 
-    if (progress) {
-      progress.counter.on("error", fail);
-      tar.stdout?.pipe(progress.counter).pipe(ssh.stdin ?? null);
-    } else {
-      tar.stdout?.pipe(ssh.stdin ?? null);
-    }
-    tar.stderr?.on("data", (chunk) => {
-      tarStderr += String(chunk);
-    });
-    ssh.stderr?.on("data", (chunk) => {
-      sshStderr += String(chunk);
-    });
+        if (progress) {
+          progress.counter.on("error", fail);
+          tar.stdout?.pipe(progress.counter).pipe(ssh.stdin!);
+        } else {
+          tar.stdout?.pipe(ssh.stdin!);
+        }
+        tar.stderr?.on("data", (chunk) => {
+          tarStderr = (tarStderr + String(chunk)).slice(-128 * 1024);
+        });
+        ssh.stderr?.on("data", (chunk) => {
+          sshStderr = (sshStderr + String(chunk)).slice(-128 * 1024);
+        });
 
-    tar.on("error", fail);
-    ssh.on("error", fail);
-    tar.on("close", (code) => {
-      tarExited = true;
-      tarExitCode = code;
-      maybeFinish();
-    });
-    ssh.on("close", (code) => {
-      sshExited = true;
-      sshExitCode = code;
-      maybeFinish();
-    });
+        tar.on("error", fail);
+          tar.stdin?.on("error", fail);
+        ssh.on("error", fail);
+          ssh.stdin?.on("error", fail);
+        tar.on("close", (code) => {
+          tarExited = true;
+          tarExitCode = code;
+          maybeFinish();
+        });
+        ssh.on("close", (code) => {
+          sshExited = true;
+          sshExitCode = code;
+          maybeFinish();
+        });
+      });
     }).finally(auth.cleanup);
     await progress?.finish();
   } catch (error) {
@@ -1475,69 +1472,73 @@ export async function syncDirectoryFromSsh(input: {
     : null;
 
   try {
-    await new Promise<void>((resolve, reject) => {
-      const ssh = spawn("ssh", sshArgs, {
+    await withResourceTransferGroup(async spawnProcess => {
+      const ssh = await spawnProcess("ssh", sshArgs, {
         stdio: ["ignore", "pipe", "pipe"],
       });
-      const tar = spawn("tar", ["-xf", "-", "-C", stagingDir], {
+      const tar = await spawnProcess("tar", ["-xf", "-", "-C", stagingDir], {
         stdio: ["pipe", "ignore", "pipe"],
         env: tarSpawnEnv(),
       });
+      await new Promise<void>((resolve, reject) => {
 
-      let sshStderr = "";
-      let tarStderr = "";
-      let settled = false;
-      let sshExited = false;
-      let tarExited = false;
-      let sshExitCode: number | null = null;
-      let tarExitCode: number | null = null;
+        let sshStderr = "";
+        let tarStderr = "";
+        let settled = false;
+        let sshExited = false;
+        let tarExited = false;
+        let sshExitCode: number | null = null;
+        let tarExitCode: number | null = null;
 
-      const maybeFinish = () => {
-        if (settled || !sshExited || !tarExited) return;
-        settled = true;
-        if ((sshExitCode ?? 0) !== 0) {
-          reject(new Error(sshStderr.trim() || `ssh exited with code ${sshExitCode ?? -1}`));
-          return;
+        const maybeFinish = () => {
+          if (settled || !sshExited || !tarExited) return;
+          settled = true;
+          if ((sshExitCode ?? 0) !== 0) {
+            reject(new Error(sshStderr.trim() || `ssh exited with code ${sshExitCode ?? -1}`));
+            return;
+          }
+          if ((tarExitCode ?? 0) !== 0) {
+            reject(new Error(tarStderr.trim() || `tar exited with code ${tarExitCode ?? -1}`));
+            return;
+          }
+          resolve();
+        };
+
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          ssh.kill("SIGTERM");
+          tar.kill("SIGTERM");
+          reject(error);
+        };
+
+        if (progress) {
+          progress.counter.on("error", fail);
+          ssh.stdout?.pipe(progress.counter).pipe(tar.stdin!);
+        } else {
+          ssh.stdout?.pipe(tar.stdin!);
         }
-        if ((tarExitCode ?? 0) !== 0) {
-          reject(new Error(tarStderr.trim() || `tar exited with code ${tarExitCode ?? -1}`));
-          return;
-        }
-        resolve();
-      };
+        ssh.stderr?.on("data", (chunk) => {
+          sshStderr = (sshStderr + String(chunk)).slice(-128 * 1024);
+        });
+        tar.stderr?.on("data", (chunk) => {
+          tarStderr = (tarStderr + String(chunk)).slice(-128 * 1024);
+        });
 
-      const fail = (error: Error) => {
-        if (settled) return;
-        settled = true;
-        ssh.kill("SIGTERM");
-        tar.kill("SIGTERM");
-        reject(error);
-      };
-
-      if (progress) {
-        progress.counter.on("error", fail);
-        ssh.stdout?.pipe(progress.counter).pipe(tar.stdin ?? null);
-      } else {
-        ssh.stdout?.pipe(tar.stdin ?? null);
-      }
-      ssh.stderr?.on("data", (chunk) => {
-        sshStderr += String(chunk);
-      });
-      tar.stderr?.on("data", (chunk) => {
-        tarStderr += String(chunk);
-      });
-
-      ssh.on("error", fail);
-      tar.on("error", fail);
-      ssh.on("close", (code) => {
-        sshExited = true;
-        sshExitCode = code;
-        maybeFinish();
-      });
-      tar.on("close", (code) => {
-        tarExited = true;
-        tarExitCode = code;
-        maybeFinish();
+        ssh.on("error", fail);
+        ssh.stdin?.on("error", fail);
+        tar.on("error", fail);
+        tar.stdin?.on("error", fail);
+        ssh.on("close", (code) => {
+          sshExited = true;
+          sshExitCode = code;
+          maybeFinish();
+        });
+        tar.on("close", (code) => {
+          tarExited = true;
+          tarExitCode = code;
+          maybeFinish();
+        });
       });
     });
     await progress?.finish();

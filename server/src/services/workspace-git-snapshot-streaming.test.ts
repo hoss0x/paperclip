@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+vi.mock("./host-execution-resources.js", () => ({
+  withHostExecutionResources: async (_signal: AbortSignal | undefined, execute: () => Promise<unknown>) => execute(),
+}));
 import { disposeGitWorkspaceSnapshot, readGitWorkspaceSnapshot, runLocalGit, setExpensiveWorkspaceGitExecutor, type GitWorkspaceSnapshot } from "@paperclipai/adapter-utils/git-workspace-sync";
 import { isPathManifest, workspacePaths } from "@paperclipai/adapter-utils/workspace-manifest";
 import { prepareSandboxManagedRuntime, type PreparedSandboxManagedRuntime, type SandboxManagedRuntimeClient } from "@paperclipai/adapter-utils/sandbox-managed-runtime";
@@ -61,6 +64,10 @@ it("streams and stages all four real Git filename lanes above 32 MiB through the
   const env = { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_COMMITTER_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.test", GIT_COMMITTER_EMAIL: "test@example.test" };
   const git = (args: string[]) => runLocalGit(repo, args, { env, timeout: 120_000, maxBuffer: 64 * 1024 });
   await git(["init"]);
+  // Managed Git launchers may remove author environment overrides. Keep this
+  // disposable repository independent of the operator's global Git identity.
+  await git(["config", "user.name", "Test"]);
+  await git(["config", "user.email", "test@example.test"]);
   await git(["commit", "--allow-empty", "-qm", "fixture"]);
   // Leave room for the fixture/staging root below macOS's 1,024-byte path
   // limit while keeping each 40,000-name Git lane above the 32 MiB boundary.
@@ -144,12 +151,14 @@ it("streams and stages all four real Git filename lanes above 32 MiB through the
   checkLargeLane(changed.overlayPaths);
   await disposeGitWorkspaceSnapshot(changed);
   await fs.rm(parent, { recursive: true });
+  for (const name of unusual) await fs.rm(path.join(repo, name));
   const deleted = await scan();
   checkLargeLane(deleted.deletedPaths);
   await stage(deleted);
   let remaining = 0;
   for await (const _entry of await fs.opendir(remoteParent)) remaining++;
   expect(remaining).toBe(0);
+  for (const name of unusual) await expect(fs.stat(path.join(remote, name))).rejects.toMatchObject({ code: "ENOENT" });
   expect(commands.every((command) => command.length < 16 * 1024)).toBe(true);
   expect(scheduler.snapshot()).toMatchObject({ activeCount: 0, queuedCount: 0, inFlightCount: 0, cacheBytes: 0 });
 }, realGitTimeoutMs);

@@ -1,7 +1,8 @@
+import { prepareAdapterExecutionTargetRuntime, runAdapterExecutionTargetShellCommand } from "./host-execution-target.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { prepareAdapterExecutionTargetRuntime, runAdapterExecutionTargetShellCommand, type AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
+import { type AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import { type DirectorySnapshot, type SnapshotEntry } from "@paperclipai/adapter-utils/workspace-restore-merge";
 import { captureAgentFiles, checkpointPath, type AgentFileManifest, type AgentFileCheckpointStats } from "./scripts/agent-file-checkpoint.mjs";
 import { inspectAgentFile, MAX_AGENT_DIRECTORY_BYTES, MAX_AGENT_DIRECTORY_ENTRIES, MAX_AGENT_FILE_BYTES } from "./agent-file-store.js";

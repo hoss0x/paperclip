@@ -1,8 +1,11 @@
 import { hasNativeLocalProcessStop } from "../native-local-process-stop.js";
+import { withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
+import { recoverRecordedExecutionUnit } from "./recovered-execution-unit.js";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rename, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -13,6 +16,7 @@ import {
   companies,
   createDb,
   heartbeatRuns,
+  heartbeatRunEvents,
   issueRecoveryActions,
   issues,
   nativeRunFinalizations,
@@ -397,171 +401,221 @@ describeEmbeddedPostgres("native runner restart recovery with real processes", (
 
   realProcessIt("adopts one active runner across hot and hard controller restarts without duplicating steering", async () => {
     const fixture = await seedRun("LIVE");
-    const stateDirectory = resolve(runtimeRoot, fixture.runId);
-    const baseOptions = transportOptions(fixture, stateDirectory);
-    const options = {
-      ...baseOptions,
-      codexArgs: [...baseOptions.codexArgs, "--linger-after-turn-start"],
-    };
-    const first = createRunnerdCodexTransport(options);
-    let runnerPid: number | null = null;
-    let adopted: ReturnType<typeof createRunnerdCodexTransport> | null = null;
-    let adoptedAfterHardRestart:
-      | ReturnType<typeof createRunnerdCodexTransport>
-      | null = null;
-    try {
-      const started = await first.transport.request("thread/start", {
-        cwd: tmpdir(),
-        dynamicTools: [],
+    const isolated = process.env.PAPERCLIP_TEST_SYSTEMD === "1";
+    return withOperatorExecutionResources({
+      runId: fixture.runId,
+      scratchDir: process.env.PAPERCLIP_SCRATCH_DIR ?? runtimeRoot,
+      onUnitPrepared: async payload => {
+        await fixture.db.insert(heartbeatRunEvents).values({
+          companyId, runId: fixture.runId, agentId, seq: 1,
+          eventType: "execution_resource_prepared", payload,
+        });
+      },
+    }, async () => {
+      const stateDirectory = resolve(runtimeRoot, fixture.runId);
+      const baseOptions = transportOptions(fixture, stateDirectory);
+      const recordSpawn = vi.fn(async (meta: { pid: number; processGroupId: number | null; startedAt: string }) => {
+        await fixture.db.update(heartbeatRuns).set({ processPid: meta.pid, processGroupId: meta.processGroupId,
+          processStartedAt: new Date((await readProcessStartedAt(meta.pid)) ?? meta.startedAt),
+        }).where(eq(heartbeatRuns.id, fixture.runId));
       });
-      const thread = started.thread as Record<string, unknown>;
-      const turnStarted = await first.transport.request("turn/start", {
-        input: [{ type: "text", text: "Hold this turn across restarts." }],
-      });
-      const providerTurnId = String(
-        (turnStarted.turn as Record<string, unknown>).id,
-      );
-      await first.transport.request("turn/steer", {
-        input: [{ type: "text", text: "before hot restart" }],
-        expectedTurnId: providerTurnId,
-        correlationId: "steer-before-hot",
-      });
-      runnerPid = first.evidence().runnerPid;
-      if (!runnerPid) throw new Error("Real runner PID was not observed");
-      await persistRestartEvidence({
-        fixture,
-        runnerPid,
-        processGroupId: first.evidence().runnerProcessGroupId,
-        providerPid: first.evidence().providerPid,
-        providerSessionId: String(thread.id),
-      });
-
-      await first.detachControllerForRestart();
-      const [claim] = await claimNativeRestartRecoveries({
-        db: fixture.db,
-        controller: successor,
-        restartKind: "hot",
-        recoveryRequestId: "hot-restart-request",
-        now: new Date(),
-        runIds: [fixture.runId],
-      });
-      expect(claim).toMatchObject({
-        kind: "reattach_existing_runner",
-        runId: fixture.runId,
-        controllerGeneration: 2,
-        providerAttempt: 0,
-        process: { pid: runnerPid },
-      });
-      if (!claim || claim.kind !== "reattach_existing_runner") {
-        throw new Error("Expected live-runner recovery claim");
-      }
-
-      const duplicateLauncher = vi.fn(() => {
-        throw new Error("duplicate runner spawn attempted");
-      });
-      adopted = createRunnerdCodexTransport({
-        ...options,
-        resumeDynamicTools: [],
-        runnerProcessLauncher: duplicateLauncher,
-        adoptExistingRunner: {
-          ...claim.process,
-          isAlive: () => processAlive(runnerPid),
-        },
-      });
-      const restored = await adopted.transport.request("thread/read", {});
-      expect(restored.thread).toMatchObject({
-        id: thread.id,
-        turns: [{ id: providerTurnId, status: "inProgress" }],
-      });
-      expect(adopted.evidence().runnerPid).toBe(runnerPid);
-      expect(duplicateLauncher).not.toHaveBeenCalled();
-      await adopted.transport.request("turn/steer", {
-        input: [{ type: "text", text: "after hot restart" }],
-        expectedTurnId: providerTurnId,
-        correlationId: "steer-after-hot",
-      });
-
-      await adopted.detachControllerForRestart();
-      const hardRestartController: NativeControllerIdentity = {
-        ...successor,
-        bootId: randomUUID(),
+      const options = {
+        ...baseOptions,
+        codexArgs: [...baseOptions.codexArgs, "--linger-after-turn-start"],
+        runnerProcessLauncher: createResourceProcessLauncher({ runId: fixture.runId, onSpawn: recordSpawn }),
+        onSpawn: recordSpawn,
       };
-      await fixture.db
-        .update(nativeRunFinalizations)
-        .set({
-          controllerPid: 2_000_000_001,
-          controllerProcessStartedAt: new Date(
-            "2026-09-04T11:30:00.000Z",
-          ),
-        })
-        .where(eq(nativeRunFinalizations.runId, fixture.runId));
-      const [hardClaim] = await claimNativeRestartRecoveries({
-        db: fixture.db,
-        controller: hardRestartController,
-        restartKind: "hard",
-        now: new Date(),
-        runIds: [fixture.runId],
-      });
-      expect(hardClaim).toMatchObject({
-        kind: "reattach_existing_runner",
-        runId: fixture.runId,
-        controllerGeneration: 3,
-        providerAttempt: 0,
-        process: { pid: runnerPid },
-      });
-      if (!hardClaim || hardClaim.kind !== "reattach_existing_runner") {
-        throw new Error("Expected second live-runner recovery claim");
-      }
-      const secondDuplicateLauncher = vi.fn(() => {
-        throw new Error("duplicate runner spawn attempted after hard restart");
-      });
-      adoptedAfterHardRestart = createRunnerdCodexTransport({
-        ...options,
-        resumeDynamicTools: [],
-        runnerProcessLauncher: secondDuplicateLauncher,
-        adoptExistingRunner: {
-          ...hardClaim.process,
-          isAlive: () => processAlive(runnerPid),
-        },
-      });
-      await expect(
-        adoptedAfterHardRestart.transport.request("thread/read", {}),
-      ).resolves.toMatchObject({
-        thread: {
+      const first = createRunnerdCodexTransport(options);
+      let runnerPid: number | null = null;
+      let ownedUnit: Awaited<ReturnType<typeof recoverRecordedExecutionUnit>> = null;
+      let adopted: ReturnType<typeof createRunnerdCodexTransport> | null = null;
+      let adoptedAfterHardRestart:
+        | ReturnType<typeof createRunnerdCodexTransport>
+        | null = null;
+      try {
+        const started = await first.transport.request("thread/start", {
+          cwd: tmpdir(),
+          dynamicTools: [],
+        });
+        const thread = started.thread as Record<string, unknown>;
+        const turnStarted = await first.transport.request("turn/start", {
+          input: [{ type: "text", text: "Hold this turn across restarts." }],
+        });
+        const providerTurnId = String(
+          (turnStarted.turn as Record<string, unknown>).id,
+        );
+        await first.transport.request("turn/steer", {
+          input: [{ type: "text", text: "before hot restart" }],
+          expectedTurnId: providerTurnId,
+          correlationId: "steer-before-hot",
+        });
+        runnerPid = first.evidence().runnerPid;
+        if (!runnerPid) throw new Error("Real runner PID was not observed");
+        expect(recordSpawn).toHaveBeenCalledOnce();
+        expect(recordSpawn.mock.calls[0]?.[0].pid).toBe(runnerPid);
+        if (isolated) {
+          const group = await readFile(`/proc/${runnerPid}/cgroup`, "utf8");
+          expect(group).toContain(`paperclip-execution-${fixture.runId}-`);
+          expect(group).not.toContain("paperclipai.service");
+          expect(first.evidence().runnerProcessGroupId).toBeNull();
+          const fingerprint = await readProcessStartedAt(runnerPid);
+          const isAlive = async () => processAlive(runnerPid) && await readProcessStartedAt(runnerPid!) === fingerprint;
+          await expect(recoverRecordedExecutionUnit(fixture.db, {
+            companyId: randomUUID(), runId: fixture.runId, pid: runnerPid, isAlive,
+          })).rejects.toThrow("ownership is missing");
+          await expect(recoverRecordedExecutionUnit(fixture.db, {
+            companyId, runId: randomUUID(), pid: runnerPid, isAlive,
+          })).rejects.toThrow("ownership is missing");
+          ownedUnit = await recoverRecordedExecutionUnit(fixture.db, {
+            companyId, runId: fixture.runId, pid: runnerPid,
+            isAlive,
+          });
+          expect(ownedUnit).not.toBeNull();
+          await writeFile(resolve(process.env.PAPERCLIP_SCRATCH_DIR!, "database-native-restart-unit.json"), JSON.stringify({
+            runId: fixture.runId, runnerPid, fingerprint, group,
+            memoryMaxMiB: 96, processGroupId: first.evidence().runnerProcessGroupId,
+          }));
+        }
+        await persistRestartEvidence({
+          fixture,
+          runnerPid,
+          processGroupId: first.evidence().runnerProcessGroupId,
+          providerPid: first.evidence().providerPid,
+          providerSessionId: String(thread.id),
+        });
+
+        await first.detachControllerForRestart();
+        const [claim] = await claimNativeRestartRecoveries({
+          db: fixture.db,
+          controller: successor,
+          restartKind: "hot",
+          recoveryRequestId: "hot-restart-request",
+          now: new Date(),
+          runIds: [fixture.runId],
+        });
+        expect(claim).toMatchObject({
+          kind: "reattach_existing_runner",
+          runId: fixture.runId,
+          controllerGeneration: 2,
+          providerAttempt: 0,
+          process: { pid: runnerPid },
+        });
+        if (!claim || claim.kind !== "reattach_existing_runner") {
+          throw new Error("Expected live-runner recovery claim");
+        }
+
+        const duplicateLauncher = vi.fn(() => {
+          throw new Error("duplicate runner spawn attempted");
+        });
+        adopted = createRunnerdCodexTransport({
+          ...options,
+          resumeDynamicTools: [],
+          runnerProcessLauncher: duplicateLauncher,
+          adoptExistingRunner: {
+            ...claim.process,
+            isAlive: () => processAlive(runnerPid),
+            signal: ownedUnit?.signal,
+            cleanup: ownedUnit?.cleanup,
+          },
+        });
+        const restored = await adopted.transport.request("thread/read", {});
+        expect(restored.thread).toMatchObject({
           id: thread.id,
           turns: [{ id: providerTurnId, status: "inProgress" }],
-        },
-      });
-      await adoptedAfterHardRestart.transport.request("turn/steer", {
-        input: [{ type: "text", text: "after hard restart" }],
-        expectedTurnId: providerTurnId,
-        correlationId: "steer-after-hard",
-      });
-      expect(adoptedAfterHardRestart.evidence().runnerPid).toBe(runnerPid);
-      expect(secondDuplicateLauncher).not.toHaveBeenCalled();
-      const providerCalls = await readFile(
-        resolve(stateDirectory, "fake-codex-calls.log"),
-        "utf8",
-      );
-      expect(providerCalls.match(/^turn\/start$/gm)).toHaveLength(1);
-      expect(providerCalls.match(/^turn\/steer$/gm)).toHaveLength(3);
-      expect(
+        });
+        expect(adopted.evidence().runnerPid).toBe(runnerPid);
+        expect(duplicateLauncher).not.toHaveBeenCalled();
+        await adopted.transport.request("turn/steer", {
+          input: [{ type: "text", text: "after hot restart" }],
+          expectedTurnId: providerTurnId,
+          correlationId: "steer-after-hot",
+        });
+
+        await adopted.detachControllerForRestart();
+        const hardRestartController: NativeControllerIdentity = {
+          ...successor,
+          bootId: randomUUID(),
+        };
         await fixture.db
-          .select({ id: heartbeatRuns.id })
-          .from(heartbeatRuns)
-          .where(
-            and(
-              eq(heartbeatRuns.retryOfRunId, fixture.runId),
-              eq(heartbeatRuns.companyId, companyId),
+          .update(nativeRunFinalizations)
+          .set({
+            controllerPid: 2_000_000_001,
+            controllerProcessStartedAt: new Date(
+              "2026-09-04T11:30:00.000Z",
             ),
-          ),
-      ).toHaveLength(0);
-    } finally {
-      await adoptedAfterHardRestart?.transport.close().catch(() => undefined);
-      await adopted?.transport.close().catch(() => undefined);
-      await stopOwnedProcessGroup(runnerPid, stateDirectory).catch(() => undefined);
-      await rm(stateDirectory, { recursive: true, force: true });
-    }
+          })
+          .where(eq(nativeRunFinalizations.runId, fixture.runId));
+        const [hardClaim] = await claimNativeRestartRecoveries({
+          db: fixture.db,
+          controller: hardRestartController,
+          restartKind: "hard",
+          now: new Date(),
+          runIds: [fixture.runId],
+        });
+        expect(hardClaim).toMatchObject({
+          kind: "reattach_existing_runner",
+          runId: fixture.runId,
+          controllerGeneration: 3,
+          providerAttempt: 0,
+          process: { pid: runnerPid },
+        });
+        if (!hardClaim || hardClaim.kind !== "reattach_existing_runner") {
+          throw new Error("Expected second live-runner recovery claim");
+        }
+        const secondDuplicateLauncher = vi.fn(() => {
+          throw new Error("duplicate runner spawn attempted after hard restart");
+        });
+        adoptedAfterHardRestart = createRunnerdCodexTransport({
+          ...options,
+          resumeDynamicTools: [],
+          runnerProcessLauncher: secondDuplicateLauncher,
+          adoptExistingRunner: {
+            ...hardClaim.process,
+            isAlive: () => processAlive(runnerPid),
+            signal: ownedUnit?.signal,
+            cleanup: ownedUnit?.cleanup,
+          },
+        });
+        await expect(
+          adoptedAfterHardRestart.transport.request("thread/read", {}),
+        ).resolves.toMatchObject({
+          thread: {
+            id: thread.id,
+            turns: [{ id: providerTurnId, status: "inProgress" }],
+          },
+        });
+        await adoptedAfterHardRestart.transport.request("turn/steer", {
+          input: [{ type: "text", text: "after hard restart" }],
+          expectedTurnId: providerTurnId,
+          correlationId: "steer-after-hard",
+        });
+        expect(adoptedAfterHardRestart.evidence().runnerPid).toBe(runnerPid);
+        expect(secondDuplicateLauncher).not.toHaveBeenCalled();
+        const providerCalls = await readFile(
+          resolve(stateDirectory, "fake-codex-calls.log"),
+          "utf8",
+        );
+        expect(providerCalls.match(/^turn\/start$/gm)).toHaveLength(1);
+        expect(providerCalls.match(/^turn\/steer$/gm)).toHaveLength(3);
+        expect(
+          await fixture.db
+            .select({ id: heartbeatRuns.id })
+            .from(heartbeatRuns)
+            .where(
+              and(
+                eq(heartbeatRuns.retryOfRunId, fixture.runId),
+                eq(heartbeatRuns.companyId, companyId),
+              ),
+            ),
+        ).toHaveLength(0);
+      } finally {
+        await adoptedAfterHardRestart?.transport.close().catch(() => undefined);
+        await adopted?.transport.close().catch(() => undefined);
+        await ownedUnit?.cleanup();
+        await stopOwnedProcessGroup(runnerPid, stateDirectory).catch(() => undefined);
+        await rm(stateDirectory, { recursive: true, force: true });
+      }
+    });
   }, 45_000);
 
   realProcessIt("hard-restarts a dead runner on the same run and provider session", async () => {

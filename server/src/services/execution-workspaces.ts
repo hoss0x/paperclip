@@ -1,9 +1,9 @@
+import { execFileWithResources } from "@paperclipai/adapter-utils/resource-buffered-command";
+import { withHostExecutionResources } from "./host-execution-resources.js";
 import { createWorkspaceGitInspectionCache } from "./workspace-git-inspection-cache.js";
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { and, asc, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -67,7 +67,6 @@ type ExecutionWorkspaceRow = typeof executionWorkspaces.$inferSelect;
 type WorkspaceRuntimeServiceRow = typeof workspaceRuntimeServices.$inferSelect;
 type RuntimeServiceReadDb = Pick<Db, "select">;
 type DbTransaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
-const execFileAsync = promisify(execFile);
 const TERMINAL_ISSUE_STATUSES = new Set(["done", "cancelled"]);
 
 // Return the timestamp when an issue became terminal. A `done` issue uses
@@ -400,7 +399,8 @@ async function pathExists(value: string | null | undefined) {
 }
 
 async function runGit(args: string[], cwd: string) {
-  return await execFileAsync("git", ["-C", cwd, ...args], { cwd });
+  return withHostExecutionResources(undefined, () =>
+    execFileWithResources("git", ["-C", cwd, ...args], { cwd, timeout: 120_000, maxBuffer: 1024 * 1024 }));
 }
 
 async function runExpensiveGitStatus(input: {
@@ -2265,7 +2265,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
       );
     },
 
-    getCloseReadiness: async (id: string): Promise<ExecutionWorkspaceCloseReadiness | null> => {
+    getCloseReadiness: async (id: string, options: { forDisplay?: boolean } = {}): Promise<ExecutionWorkspaceCloseReadiness | null> => {
       const workspace = await db
         .select()
         .from(executionWorkspaces)
@@ -2336,7 +2336,7 @@ export function executionWorkspaceService(db: Db, opts: ExecutionWorkspaceServic
         git,
         warnings: gitWarnings,
         statusInspectionSucceeded,
-      } = await inspectGitCloseReadiness(executionWorkspace);
+      } = await (options.forDisplay ? inspectDisplay : inspectGitCloseReadiness)(executionWorkspace);
       const { deliveryState } = await assessDelivery(workspace, git);
       const warnings = [...gitWarnings];
       const blockingReasons: string[] = [];

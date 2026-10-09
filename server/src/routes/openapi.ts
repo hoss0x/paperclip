@@ -310,14 +310,23 @@ import {
   companyImportTransferDeclarationSchema,
 } from "@paperclipai/shared/company-import-transfer";
 
+// The converter reads metadata; it does not parse input or use Zod's fluent
+// methods. Comparing every registered schema against the full recursive Zod
+// type makes the compiler retain needless method/type relations. Keep this
+// boundary limited to the fields the converter and runtime guard actually use.
+interface OpenApiSchema {
+  readonly _def: unknown;
+  readonly safeParse: unknown;
+}
+
 type JsonSchema = Record<string, unknown>;
 type OpenApiResponse = Record<string, unknown>;
 type OpenApiPathRegistration = {
   method: string;
   path: string;
   request?: {
-    params?: z.ZodTypeAny;
-    query?: z.ZodTypeAny;
+    params?: OpenApiSchema;
+    query?: OpenApiSchema;
     body?: {
       content: Record<string, { schema: unknown }>;
       required?: boolean;
@@ -333,28 +342,28 @@ type OpenApiPathRegistration = {
 // public type for every internal def shape.
 type ZodDefAny = Record<string, unknown> & { type: string };
 
-const zodDef = (schema: z.ZodTypeAny): ZodDefAny =>
+const zodDef = (schema: OpenApiSchema): ZodDefAny =>
   schema._def as unknown as ZodDefAny;
-const zodTypeName = (schema: z.ZodTypeAny): string => zodDef(schema).type;
+const zodTypeName = (schema: OpenApiSchema): string => zodDef(schema).type;
 
-function unwrapSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
+function unwrapSchema(schema: OpenApiSchema): OpenApiSchema {
   const def = zodDef(schema);
   if (
     def.type === "optional" ||
     def.type === "default" ||
     def.type === "catch"
   ) {
-    return unwrapSchema(def.innerType as z.ZodTypeAny);
+    return unwrapSchema(def.innerType as OpenApiSchema);
   }
   // A `.transform()` or `.pipe()` becomes a pipe. Read the input schema so the
   // published contract describes the value a client sends.
   if (def.type === "pipe") {
-    return unwrapSchema(def.in as z.ZodTypeAny);
+    return unwrapSchema(def.in as OpenApiSchema);
   }
   return schema;
 }
 
-function isOptionalSchema(schema: z.ZodTypeAny): boolean {
+function isOptionalSchema(schema: OpenApiSchema): boolean {
   const def = zodDef(schema);
   if (
     def.type === "optional" ||
@@ -364,10 +373,10 @@ function isOptionalSchema(schema: z.ZodTypeAny): boolean {
     return true;
   }
   if (def.type === "pipe") {
-    return isOptionalSchema(def.in as z.ZodTypeAny);
+    return isOptionalSchema(def.in as OpenApiSchema);
   }
   if (def.type === "nullable") {
-    return isOptionalSchema(def.innerType as z.ZodTypeAny);
+    return isOptionalSchema(def.innerType as OpenApiSchema);
   }
   return false;
 }
@@ -429,7 +438,7 @@ function applyNumberChecks(
   }
 }
 
-function zodToOpenApiSchema(schema: z.ZodTypeAny): JsonSchema {
+function zodToOpenApiSchema(schema: OpenApiSchema): JsonSchema {
   const unwrapped = unwrapSchema(schema);
   const def = zodDef(unwrapped);
   const typeName = def.type;
@@ -475,20 +484,20 @@ function zodToOpenApiSchema(schema: z.ZodTypeAny): JsonSchema {
   if (typeName === "array") {
     return {
       type: "array",
-      items: zodToOpenApiSchema(def.element as z.ZodTypeAny),
+      items: zodToOpenApiSchema(def.element as OpenApiSchema),
     };
   }
 
   if (typeName === "record") {
     return {
       type: "object",
-      additionalProperties: zodToOpenApiSchema(def.valueType as z.ZodTypeAny),
+      additionalProperties: zodToOpenApiSchema(def.valueType as OpenApiSchema),
     };
   }
 
   if (typeName === "nullable") {
     return {
-      ...zodToOpenApiSchema(def.innerType as z.ZodTypeAny),
+      ...zodToOpenApiSchema(def.innerType as OpenApiSchema),
       nullable: true,
     };
   }
@@ -497,7 +506,7 @@ function zodToOpenApiSchema(schema: z.ZodTypeAny): JsonSchema {
   // type with the members on `options`.
   if (typeName === "union") {
     return {
-      oneOf: (def.options as z.ZodTypeAny[]).map((option) =>
+      oneOf: (def.options as OpenApiSchema[]).map((option) =>
         zodToOpenApiSchema(option),
       ),
     };
@@ -506,14 +515,14 @@ function zodToOpenApiSchema(schema: z.ZodTypeAny): JsonSchema {
   if (typeName === "intersection") {
     return {
       allOf: [
-        zodToOpenApiSchema(def.left as z.ZodTypeAny),
-        zodToOpenApiSchema(def.right as z.ZodTypeAny),
+        zodToOpenApiSchema(def.left as OpenApiSchema),
+        zodToOpenApiSchema(def.right as OpenApiSchema),
       ],
     };
   }
 
   if (typeName === "object") {
-    const shape = def.shape as Record<string, z.ZodTypeAny>;
+    const shape = def.shape as Record<string, OpenApiSchema>;
     const properties: Record<string, JsonSchema> = {};
     const required: string[] = [];
     for (const [key, value] of Object.entries(shape)) {
@@ -526,7 +535,7 @@ function zodToOpenApiSchema(schema: z.ZodTypeAny): JsonSchema {
     // `never` catchall. Publish the constraint as `additionalProperties: false`,
     // so a client, a gateway, or a handler that treats the contract as
     // authoritative rejects an extra property too.
-    const catchall = def.catchall as z.ZodTypeAny | undefined;
+    const catchall = def.catchall as OpenApiSchema | undefined;
     if (catchall && zodDef(catchall).type === "never") {
       jsonSchema.additionalProperties = false;
     }
@@ -550,12 +559,12 @@ function normalizeContent(content: Record<string, { schema: unknown }>) {
   );
 }
 
-function isZodSchema(value: unknown): value is z.ZodTypeAny {
+function isZodSchema(value: unknown): value is OpenApiSchema {
   return Boolean(
     value &&
     typeof value === "object" &&
     "_def" in value &&
-    typeof (value as z.ZodTypeAny).safeParse === "function",
+    typeof (value as OpenApiSchema).safeParse === "function",
   );
 }
 
@@ -578,12 +587,12 @@ function normalizeResponses(responses: Record<string, OpenApiResponse> = {}) {
 }
 
 function parametersFromSchema(
-  schema: z.ZodTypeAny,
+  schema: OpenApiSchema,
   location: "path" | "query",
 ) {
   const objectSchema = unwrapSchema(schema);
   if (zodTypeName(objectSchema) !== "object") return [];
-  const shape = zodDef(objectSchema).shape as Record<string, z.ZodTypeAny>;
+  const shape = zodDef(objectSchema).shape as Record<string, OpenApiSchema>;
   return Object.entries(shape).map(([name, value]) => ({
     name,
     in: location,
@@ -596,7 +605,7 @@ class OpenAPIRegistry {
   private readonly schemas: Record<string, JsonSchema> = {};
   private readonly paths: Array<OpenApiPathRegistration> = [];
 
-  register(name: string, schema: z.ZodTypeAny) {
+  register(name: string, schema: OpenApiSchema) {
     this.schemas[name] = zodToOpenApiSchema(schema);
     return { $ref: `#/components/schemas/${name}` };
   }
@@ -659,7 +668,7 @@ const cliAuthChallengeIdParamSchema = z.string().trim()
 const ErrorSchema = registry.register("Error", z.object({ error: z.string() }));
 
 const responses = {
-  ok: (schema: z.ZodTypeAny = z.record(z.string(), z.unknown())) => ({
+  ok: (schema: OpenApiSchema = z.record(z.string(), z.unknown())) => ({
     description: "Success",
     content: { "application/json": { schema } },
   }),
@@ -706,7 +715,7 @@ const responses = {
   },
 };
 
-const jsonBody = (schema: z.ZodTypeAny) => ({
+const jsonBody = (schema: OpenApiSchema) => ({
   content: { "application/json": { schema } },
   required: true as const,
 });
@@ -715,7 +724,7 @@ const jsonBody = (schema: z.ZodTypeAny) => ({
 // company package as a compressed zip upload. Document both content types: the
 // JSON variant keeps its zod schema; the multipart variant carries the zip in a
 // `package` file field plus the other import fields as a JSON `meta` field.
-const importRequestBody = (schema: z.ZodTypeAny) => ({
+const importRequestBody = (schema: OpenApiSchema) => ({
   content: {
     "application/json": { schema },
     "multipart/form-data": {
@@ -1230,8 +1239,8 @@ function registerCurrentRoute(input: {
   path: string;
   tags: string[];
   summary: string;
-  query?: z.ZodTypeAny;
-  body?: z.ZodTypeAny;
+  query?: OpenApiSchema;
+  body?: OpenApiSchema;
   responses?: Record<string, OpenApiResponse>;
 }) {
   const params = paramsSchemaFromPath(input.path);
@@ -2275,8 +2284,8 @@ const githubBotOperations: Array<{
   suffix: string;
   summary: string;
   description: string;
-  body?: z.ZodTypeAny;
-  response: z.ZodTypeAny;
+  body?: OpenApiSchema;
+  response: OpenApiSchema;
 }> = [
   {
     method: "get", suffix: "configuration", summary: "Read GitHub bot review configuration",

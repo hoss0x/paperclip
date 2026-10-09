@@ -135,6 +135,7 @@ export interface CodexAcpxDynamicToolCall {
 }
 
 export interface CodexAcpxDriverOptions {
+  prepareCommandResources?: OpenAcpxRuntimeHostOptions["prepareCommandResources"];
   /** Defaults to Codex for backward compatibility. */
   agent?: QualifiedAcpxAgent;
   runtimeDirectory: string;
@@ -446,6 +447,7 @@ export class CodexAcpxDriver implements HarnessDriver {
     const host = await this.#openHostForAdmission(
       {
         runtimeDirectory: this.#options.runtimeDirectory,
+        prepareCommandResources: this.#options.prepareCommandResources,
         normalizedSessionId: input.normalizedSessionId,
         workingDirectory: input.workingDirectory,
         agent: this.#options.agent ?? "codex",

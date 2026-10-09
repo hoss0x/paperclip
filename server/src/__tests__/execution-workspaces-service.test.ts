@@ -419,6 +419,20 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     return { companyId, projectId, executionWorkspaceId, sourceIssueId, identifier, repoRoot, worktreePath, headSha };
   }
 
+  it("reuses display Git inspection but sees later edits before destructive close", async () => {
+    const seeded = await seedTerminalWorkspace();
+    await svc.getById(seeded.executionWorkspaceId);
+    const initial = await svc.getCloseReadiness(seeded.executionWorkspaceId, { forDisplay: true });
+    expect(initial?.git?.hasUntrackedFiles).toBe(false);
+    const [row] = await db.select().from(executionWorkspaces)
+      .where(eq(executionWorkspaces.id, seeded.executionWorkspaceId));
+    await fs.writeFile(path.join(row.cwd!, "new-untracked.txt"), "must survive cleanup\n");
+    const cached = await svc.getCloseReadiness(seeded.executionWorkspaceId, { forDisplay: true });
+    expect(cached?.git?.hasUntrackedFiles).toBe(false);
+    const fresh = await svc.getCloseReadiness(seeded.executionWorkspaceId);
+    expect(fresh?.git?.hasUntrackedFiles).toBe(true);
+  }, 20_000);
+
   it("reports a squash cross-branch delivery as merged_via_pr and suppresses the ancestry warning", async () => {
     const repoRoot = await createTempRepo();
     tempDirs.add(repoRoot);

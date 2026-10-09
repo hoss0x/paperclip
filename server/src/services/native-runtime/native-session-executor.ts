@@ -1,3 +1,9 @@
+import { currentExecutionResources, type ExecutionResourceOwnership } from "@paperclipai/adapter-utils/execution-resource-context";
+import { createResourceOpenCodeLauncher } from "./resource-opencode-launcher.js";
+import { createResourceAcpxCommands } from "./resource-acpx-commands.js";
+import { createResourceCodexTransport } from "./resource-codex-transport.js";
+import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
+import { recoverRecordedExecutionUnit } from "./recovered-execution-unit.js";
 import { resolveAcpxQualification } from "./acpx-qualification.js";
 import { readLocalAiCredentialFile } from "../local-ai-credential-file.js";
 import { prepareGrokRunnerCredentials } from "./grok-runner-credentials.js";
@@ -157,7 +163,7 @@ import {
 } from "./status-arbiter.js";
 import { HttpError } from "../../errors.js";
 import { redactSensitiveText } from "../../redaction.js";
-import { resolvePaperclipRunnerBinary } from "./native-codex-runner.js";
+import { resolvePaperclipRunnerBinary } from "./runner-binary.js";
 import {
   createNativeRunTrace,
   isNativeRunRootHistoricalSpan,
@@ -401,6 +407,7 @@ type WarmNativeSession = {
   networkAccess: boolean;
   session: NativeSession;
   ownerToken: symbol;
+  resourceOwnership?: ExecutionResourceOwnership;
   configDigest: string;
   ownerScope: string;
   companyId: string;
@@ -8118,6 +8125,7 @@ async function executePaperclipNativeSessionWithinScope(
     `native-warm-session:${input.execution.binding.runId}`,
   );
   let existingWarmSession: NativeSession | undefined;
+  let retainedResourceOwnership: ExecutionResourceOwnership | undefined;
   let managedCredentialSession: NativeSession | undefined;
   let githubAccess: NativeGitHubAccess | undefined;
   let releaseGitHubRun: (() => void) | undefined;
@@ -8172,6 +8180,7 @@ async function executePaperclipNativeSessionWithinScope(
         if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
         entry.idleTimer = null;
         existingWarmSession = entry.session;
+        retainedResourceOwnership = entry.resourceOwnership;
         githubAccess = entry.githubAccess;
       }
     } else {
@@ -8336,6 +8345,14 @@ async function executePaperclipNativeSessionWithinScope(
           executeNativeSession({
             getFreshSessionHandoff: input.getFreshSessionHandoff,
             onSessionAdmission: async () => {
+              const resources = currentExecutionResources();
+              if (existingWarmSession && resources?.policy.isolation === "systemd" && !retainedResourceOwnership) {
+                throw new Error("Retained execution ownership is missing");
+              }
+              if (retainedResourceOwnership) {
+                if (!resources) throw new Error("Retained execution resource context is missing");
+                await retainedResourceOwnership.handoff(resources);
+              }
               // Invalidate prior stop evidence before a backend can spawn.
               await appendHeartbeatRunEvent(input.db, {
                 companyId: input.execution.binding.companyId,
@@ -8356,8 +8373,12 @@ async function executePaperclipNativeSessionWithinScope(
               createNativeSessionBackend(input.execution, {
                 runnerInstanceId: input.runnerInstanceId,
                 onSpawn: input.onSpawn,
+                processTransportFactory: createResourceCodexTransport(input.execution.binding.runId),
+                environment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
+                opencodeProcessLauncher: createResourceOpenCodeLauncher(input.execution.binding.runId, resolvePaperclipRunnerBinary),
                 opencodeEnvironment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
                 acpxEnvironment: resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment),
+                acpxPrepareCommandResources: createResourceAcpxCommands(input.execution.binding.runId, resolvePaperclipRunnerBinary),
                 opencodeRuntimeDirectory: resolve(
                   resolvePaperclipInstanceRoot(),
                   "runtime",
@@ -8509,6 +8530,7 @@ async function executePaperclipNativeSessionWithinScope(
                       : undefined,
                     session,
                     ownerToken: warmSessionOwnerToken,
+                    resourceOwnership: currentExecutionResources()?.ownership,
                     configDigest: warmConfigDigest,
                     ownerScope: nativeSessionOwnerScope(
                       input.execution, input.runnerExecutionTarget?.environmentId ?? null,
@@ -12420,6 +12442,14 @@ async function createRunnerdBackendWithinSessionClaim(
     input.restartRecovery?.kind === "reattach_existing_runner"
       ? input.restartRecovery.process
       : null;
+  const recoveredUnit = target.kind === "local" && localRecoveryProcess
+    ? await recoverRecordedExecutionUnit(input.db, {
+        companyId: input.execution.binding.companyId,
+        runId: input.execution.binding.runId,
+        pid: localRecoveryProcess.pid,
+        isAlive: () => verifiedRecoveryProcessIsAlive(localRecoveryProcess),
+      })
+    : null;
   const adoptedProcess =
     input.restartRecovery?.kind === "reattach_remote_runner"
       ? await verifyRemoteRunnerReattachment({
@@ -12434,7 +12464,8 @@ async function createRunnerdBackendWithinSessionClaim(
             ...localRecoveryProcess,
             isAlive: () => verifiedRecoveryProcessIsAlive(localRecoveryProcess),
             signal: (signal: NodeJS.Signals) =>
-              signalVerifiedRecoveryProcess(localRecoveryProcess, signal),
+              recoveredUnit ? recoveredUnit.signal(signal) : signalVerifiedRecoveryProcess(localRecoveryProcess, signal),
+            cleanup: recoveredUnit?.cleanup,
           }
         : undefined;
   if (adoptedProcess && remoteTarget) {
@@ -12594,7 +12625,9 @@ async function createRunnerdBackendWithinSessionClaim(
         sourceCodexHome: remoteTarget
           ? resolveSourceCodexHome(resolveNativeProviderEnvironment(input.execution.provider, input.runnerEnvironment))
           : undefined,
-        runnerProcessLauncher: remoteProcessLauncher,
+        runnerProcessLauncher: remoteProcessLauncher ?? createResourceProcessLauncher({
+          runId: input.execution.binding.runId, onSpawn: input.onSpawn,
+        }),
         runnerReconnectGraceMs: remoteTarget ? 120_000 : undefined,
         adoptExistingRunner: adoptedProcess,
         environment: effectiveRunnerEnvironment,

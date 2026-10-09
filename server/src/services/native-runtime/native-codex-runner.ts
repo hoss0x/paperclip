@@ -1,8 +1,12 @@
+import { resolvePaperclipRunnerBinary } from "./runner-binary.js";
+export { resolvePaperclipRunnerBinary } from "./runner-binary.js";
+import { withHostExecutionResources } from "../host-execution-resources.js";
+import { currentExecutionResources, withExecutionResourceContext } from "@paperclipai/adapter-utils/execution-resource-context";
+import { launchResourceStdioProcess, type ResourceStdioProcess } from "@paperclipai/adapter-utils/resource-stdio-process";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { accessSync, chmodSync, constants, mkdirSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { and, eq } from "drizzle-orm";
 
 import type { AdapterExecutionResult } from "@paperclipai/adapter-utils";
@@ -17,7 +21,6 @@ import {
 } from "../../vendor/paperclip-runner/index.js";
 import { runnerPrpCoordinator } from "./runner-prp-coordinator.js";
 
-const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const RUNNER_VERSION = "paperclip-runner-v1";
 
 interface NativeGoalControl {
@@ -164,39 +167,6 @@ export function buildNativeRunnerPreparePayload(
   };
 }
 
-function executableName(): string {
-  return process.platform === "win32" ? "paperclip-runnerd.exe" : "paperclip-runnerd";
-}
-
-export function resolvePaperclipRunnerBinary(
-  configuredPath = process.env.PAPERCLIP_RUNNER_BINARY,
-): string {
-  const candidates = [
-    configuredPath,
-    resolve(moduleDirectory, "../../vendor/paperclip-runner/bin", executableName()),
-    resolve(moduleDirectory, "../../../../packages/paperclip-runner/dist/bin", executableName()),
-    resolve(
-      moduleDirectory,
-      "../../../../packages/paperclip-runner/runner/target/release",
-      executableName(),
-    ),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-  if (configuredPath && !isAbsolute(configuredPath)) {
-    throw new Error("PAPERCLIP_RUNNER_BINARY must be an absolute path");
-  }
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.R_OK | (process.platform === "win32" ? 0 : constants.X_OK));
-      return candidate;
-    } catch {
-      // Continue through the fixed production and workspace locations.
-    }
-  }
-  throw new Error(
-    "paperclip_runner_binary_missing: build @paperclipai/paperclip-runner or set PAPERCLIP_RUNNER_BINARY",
-  );
-}
-
 export function buildNativeRunnerArguments(input: {
   connectUrl: string;
   stateDirectory: string;
@@ -270,7 +240,16 @@ async function stopChild(
   child: ChildProcess,
   exit: Promise<unknown>,
   allowGracefulExit = false,
+  ownedProcess?: ResourceStdioProcess,
 ): Promise<void> {
+  if (ownedProcess) {
+    if (allowGracefulExit && await waitForChildExit(exit, 5_000)) return;
+    ownedProcess.signal("SIGTERM");
+    if (!await waitForChildExit(exit, 5_000)) ownedProcess.signal("SIGKILL");
+    // Completion verifies the whole unit, including descendants after leader exit.
+    await exit;
+    return;
+  }
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (allowGracefulExit && await waitForChildExit(exit, 5_000)) return;
   signalRunnerProcessGroup(child, "SIGTERM");
@@ -300,6 +279,7 @@ export async function executeNativeCodexRunner(input: {
   completionContract: { revision: string; criterionIds: string[] };
   timeoutMs: number;
   environment: Record<string, string>;
+  signal?: AbortSignal;
   /** Internal test seam; production always resolves the packaged binary. */
   runnerBinary?: string;
   /** Internal test seam; production always uses the instance runtime root. */
@@ -313,6 +293,12 @@ export async function executeNativeCodexRunner(input: {
     startedAt: string;
   }) => Promise<void>;
 }): Promise<AdapterExecutionResult> {
+  return withHostExecutionResources(input.signal, () => executeNativeCodexRunnerInContext(input), input.runId);
+}
+
+async function executeNativeCodexRunnerInContext(
+  input: Parameters<typeof executeNativeCodexRunner>[0],
+): Promise<AdapterExecutionResult> {
   const binary = input.runnerBinary ?? resolvePaperclipRunnerBinary();
   const runnerDigest = `sha256:${createHash("sha256").update(readFileSync(binary)).digest("hex")}`;
   const runtimeRoot = input.runtimeRoot
@@ -381,40 +367,63 @@ export async function executeNativeCodexRunner(input: {
     prepared.queueCommand("turn.start", { text: input.prompt }, `turn_${input.runId}`);
   }
 
-  const child = spawn(binary, buildNativeRunnerArguments({
-    connectUrl: prepared.connectUrl,
-    stateDirectory: runnerStateDirectory,
-    runnerInstanceId: input.runnerInstanceId,
-    environmentLeaseId: input.environmentLeaseId,
-    runId: input.runId,
-    normalizedSessionId: input.normalizedSessionId,
-    turnId: input.turnId,
-    itemId: input.itemId,
-    runnerDigest,
-    maxRuntimeMs: input.timeoutMs,
-  }), {
-    cwd: input.cwd,
-    detached: process.platform !== "win32",
-    env: {
-      ...process.env,
-      ...input.environment,
-      PAPERCLIP_RUNNER_BOOTSTRAP_TICKET: prepared.bootstrapTicket,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const exit = waitForExit(child);
-  child.stdout?.on("data", (chunk: Buffer) => {
-    void input.onLog("stdout", chunk.toString("utf8"));
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    void input.onLog("stderr", chunk.toString("utf8"));
-  });
-
+  let child: ChildProcess | undefined;
+  let exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+  let ownedProcess: ResourceStdioProcess | undefined;
   try {
+    const args = buildNativeRunnerArguments({
+      connectUrl: prepared.connectUrl,
+      stateDirectory: runnerStateDirectory,
+      runnerInstanceId: input.runnerInstanceId,
+      environmentLeaseId: input.environmentLeaseId,
+      runId: input.runId,
+      normalizedSessionId: input.normalizedSessionId,
+      turnId: input.turnId,
+      itemId: input.itemId,
+      runnerDigest,
+      maxRuntimeMs: input.timeoutMs,
+    });
+    const env = {
+      ...process.env, ...input.environment,
+      PAPERCLIP_RUNNER_BOOTSTRAP_TICKET: prepared.bootstrapTicket,
+    };
+    const resources = currentExecutionResources();
+    if (resources?.policy.isolation === "systemd") {
+      let limited = false;
+      try {
+        ownedProcess = await withExecutionResourceContext({ ...resources,
+          onEvidence: async evidence => {
+            limited ||= evidence.resourceLimitReached;
+            await resources.onEvidence?.(evidence);
+          },
+        }, () => launchResourceStdioProcess({
+          runId: input.runId, command: binary, args, cwd: input.cwd, env, signal: input.signal,
+        }));
+      } catch (error) {
+        if (limited) throw Object.assign(new Error("Execution exceeded its memory resource limit"), {
+          code: "execution_resource_limit",
+        });
+        throw error;
+      }
+      child = ownedProcess.child;
+      child.stdin?.end();
+      exit = ownedProcess.completion.then(result => {
+        if (limited) throw Object.assign(new Error("Execution exceeded its memory resource limit"), {
+          code: "execution_resource_limit",
+        });
+        return result;
+      });
+    } else {
+      child = spawn(binary, args, { cwd: input.cwd, env,
+        detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+      exit = waitForExit(child);
+    }
+    child.stdout?.on("data", (chunk: Buffer) => { void input.onLog("stdout", chunk.toString("utf8")); });
+    child.stderr?.on("data", (chunk: Buffer) => { void input.onLog("stderr", chunk.toString("utf8")); });
     if (!child.pid) throw new Error("paperclip_runner_process_not_started");
     await input.onSpawn({
-      pid: child.pid,
-      processGroupId: process.platform === "win32" ? null : child.pid,
+      pid: ownedProcess?.pid ?? child.pid,
+      processGroupId: ownedProcess || process.platform === "win32" ? null : child.pid,
       startedAt: new Date().toISOString(),
     });
     if (goalControl) {
@@ -451,7 +460,7 @@ export async function executeNativeCodexRunner(input: {
     ]);
     prepared.queueCommand("session.close", {}, `close_${input.runId}`);
     prepared.queueCommand("runner.shutdown", {}, `shutdown_${input.runId}`);
-    await stopChild(child, exit, true);
+    await stopChild(child, exit, true, ownedProcess);
 
     const succeeded = completed === null || completed.terminal.runTerminalState === "succeeded";
     if (goalControl && completed === null) {
@@ -514,7 +523,11 @@ export async function executeNativeCodexRunner(input: {
     }
     throw error;
   } finally {
-    await stopChild(child, exit).catch(() => undefined);
-    await prepared.release();
+    try {
+      if (child && exit) {
+        if (ownedProcess) await stopChild(child, exit, false, ownedProcess);
+        else await stopChild(child, exit).catch(() => undefined);
+      }
+    } finally { await prepared.release(); }
   }
 }

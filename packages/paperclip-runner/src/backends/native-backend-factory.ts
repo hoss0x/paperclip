@@ -14,6 +14,7 @@ import {
   createAcpxNativeSessionBackend,
   type CodexAcpxNativeSessionBackendOptions,
 } from "./codex-acpx-native-backend.js";
+import type { OpenCodeServerDriverOptions } from "../drivers/opencode/opencode-server-driver.js";
 import { createOpenCodeNativeSessionBackend } from "./opencode-native-backend.js";
 
 export interface NativeBackendFactoryOptions extends Omit<
@@ -32,11 +33,13 @@ export interface NativeBackendFactoryOptions extends Omit<
   }) => CodexAppServerTransport;
   acpxRuntimeDirectory?: string;
   acpxEnvironment?: NodeJS.ProcessEnv;
+  acpxPrepareCommandResources?: CodexAcpxNativeSessionBackendOptions["prepareCommandResources"];
   acpxManagedCodexCredentialSourcePath?: string;
   acpxDynamicToolHandler?: CodexAcpxNativeSessionBackendOptions["dynamicToolHandler"];
   opencodeRuntimeDirectory?: string;
   opencodeEnvironment?: NodeJS.ProcessEnv;
   opencodeCommand?: string;
+  opencodeProcessLauncher?: OpenCodeServerDriverOptions["processLauncher"];
 }
 
 /**
@@ -58,6 +61,7 @@ export function createNativeSessionBackend(
       environment: options.environment,
       workingDirectoryAuthority: options.workingDirectoryAuthority,
       transportFactory: options.codexTransportFactory,
+    processTransportFactory: options.processTransportFactory,
     });
   }
   if (input.provider.kind === "opencode") {
@@ -71,6 +75,7 @@ export function createNativeSessionBackend(
       runtimeDirectory: options.opencodeRuntimeDirectory,
       environment: options.opencodeEnvironment,
       command: options.opencodeCommand,
+      processLauncher: options.opencodeProcessLauncher,
       runnerInstanceId: options.runnerInstanceId,
       onSpawn: options.onSpawn,
       dynamicTools: options.dynamicTools,
@@ -84,6 +89,7 @@ export function createNativeSessionBackend(
     return createAcpxNativeSessionBackend(input, {
       runtimeDirectory: options.acpxRuntimeDirectory,
       environment: options.acpxEnvironment,
+      prepareCommandResources: options.acpxPrepareCommandResources,
       ...(input.provider.agent === "codex"
         ? {
             managedCodexCredentialSourcePath:
@@ -110,5 +116,6 @@ export function createNativeSessionBackend(
     environment: options.environment,
     workingDirectoryAuthority: options.workingDirectoryAuthority,
     transportFactory: options.codexTransportFactory,
+    processTransportFactory: options.processTransportFactory,
   });
 }

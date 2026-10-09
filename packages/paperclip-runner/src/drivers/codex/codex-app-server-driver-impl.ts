@@ -269,7 +269,7 @@ export class CodexAppServerDriver implements HarnessDriver {
       this.#options.environment,
       this.#options.workingDirectoryAuthority,
     );
-    const transport = this.#transport({ workingDirectory });
+    const transport = await this.#transport({ workingDirectory, signal: input.signal });
     const cancellation = bootstrapCancellation(transport, input.signal);
     try {
       await cancellation.wait(this.#persistProcessOwnership(transport));
@@ -373,7 +373,8 @@ export class CodexAppServerDriver implements HarnessDriver {
         reason: "persisted session identity is incomplete",
       };
     }
-    const transport = this.#transport({
+    const transport = await this.#transport({
+      signal: options.signal,
       workingDirectory: snapshot.workingDirectory
         ? validateWorkingDirectory(snapshot.workingDirectory, this.#options.environment, this.#options.workingDirectoryAuthority)
         : undefined,
@@ -651,7 +652,8 @@ export class CodexAppServerDriver implements HarnessDriver {
     }
   }
 
-  #transport(context?: {
+  async #transport(context?: {
+    signal?: AbortSignal;
     workingDirectory?: string;
     providerRecoveryPolicy?: PersistedHarnessSession["providerRecoveryPolicy"];
     persistedSession?: Pick<
@@ -661,21 +663,27 @@ export class CodexAppServerDriver implements HarnessDriver {
       | "providerIdentity"
       | "activeTurnId"
     >;
-  }): CodexAppServerTransport {
+  }): Promise<CodexAppServerTransport> {
     const workingDirectory = context?.workingDirectory ?? this.#options.environment?.PAPERCLIP_WORKSPACE_CWD;
     if (!this.#options.transportFactory && this.#options.environment?.CODEX_HOME && workingDirectory) {
       trustCodexStartupRoot(this.#options.environment.CODEX_HOME, workingDirectory);
     }
-    return (
-      this.#options.transportFactory?.(context) ??
-      new ProcessCodexAppServerTransport({
-        workingDirectory,
-        args: createIsolatedCodexAppServerArgs(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot),
-        environment: createSanitizedCodexEnvironment(this.#options.environment),
-        onDiagnostic: this.#options.onDiagnostic,
-        processGroup: true,
-      })
-    );
+    if (this.#options.transportFactory) {
+      // Existing runnerd/remote factories retain their exact context contract.
+      const factoryContext = context ? (({ signal: _signal, ...rest }) => rest)(context) : undefined;
+      return this.#options.transportFactory(factoryContext);
+    }
+    const processOptions = {
+      launchSignal: context?.signal,
+      workingDirectory,
+      args: createIsolatedCodexAppServerArgs(this.#options.environment, codexExecutableReadOnlyRoots(this.#options.environment ?? process.env), this.#options.instructionWorkingCopyRoot),
+      environment: createSanitizedCodexEnvironment(this.#options.environment),
+      onDiagnostic: this.#options.onDiagnostic,
+      processGroup: true,
+    };
+    return this.#options.processTransportFactory
+      ? this.#options.processTransportFactory(processOptions)
+      : new ProcessCodexAppServerTransport(processOptions);
   }
 
   async #negotiateCollaborationMode(

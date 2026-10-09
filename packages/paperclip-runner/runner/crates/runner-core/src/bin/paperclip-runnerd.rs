@@ -14,6 +14,8 @@ use paperclip_runner_core::durable::{
 use paperclip_runner_core::local_runner::{run_local_runner, LocalRunnerError, RunnerConfig};
 use paperclip_runner_core::native_provider_backend::NativeProviderCommandExecutor;
 use serde_json::json;
+#[path = "../resource_exec.rs"]
+mod resource_exec;
 
 const RUNNERD_BUILD_METADATA_SCHEMA: &str = "paperclip-runner/runnerd-build-metadata/v1";
 const RUNNER_DIAGNOSTIC_MAX_BYTES: usize = 64 * 1024;
@@ -468,5 +470,13 @@ mod tests {
 }
 
 fn main() -> ExitCode {
-    run_main(std::env::args().skip(1).collect())
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--resource-exec") {
+        if args.len() == 2 && resource_exec::execute(Path::new(&args[1])).is_ok() {
+            return ExitCode::SUCCESS;
+        }
+        eprintln!("Execution environment handoff failed");
+        return ExitCode::from(126);
+    }
+    run_main(args)
 }
