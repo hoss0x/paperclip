@@ -1,7 +1,4 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import { withHostExecutionResources } from "./host-execution-resources.js";
 import type { ProviderQuotaResult } from "@paperclipai/shared";
 import { listServerAdapters } from "../adapters/registry.js";
 
@@ -35,10 +32,8 @@ async function pollQuotaWindows(): Promise<ProviderQuotaResult[]> {
 
   const settled = await Promise.allSettled(
     adapters.map(async adapter => {
-      const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-quota-"));
       const controller = new AbortController();
-      const task = withOperatorExecutionResources({ scratchDir, signal: controller.signal }, () => adapter.getQuotaWindows!())
-        .finally(() => fs.rm(scratchDir, { recursive: true, force: true }));
+      const task = withHostExecutionResources(controller.signal, () => adapter.getQuotaWindows!());
       return withQuotaTimeout(adapter.type, task, controller);
     }),
   );

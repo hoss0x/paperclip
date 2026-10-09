@@ -1,23 +1,21 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("node:fs/promises", () => ({ default: { mkdtemp: vi.fn().mockResolvedValue("fixture-quota-scratch"), rm: vi.fn().mockResolvedValue(undefined) } }));
-
 vi.mock("../adapters/registry.js", () => ({
   listServerAdapters: vi.fn(),
 }));
 
 import { listServerAdapters } from "../adapters/registry.js";
-vi.mock("@paperclipai/adapter-utils/execution-resource-context", () => ({
-  withOperatorExecutionResources: vi.fn((input, execute) => execute()),
+vi.mock("../services/host-execution-resources.js", () => ({
+  withHostExecutionResources: vi.fn((input, execute) => execute()),
 }));
 
-import { withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import { withHostExecutionResources } from "../services/host-execution-resources.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 
 describe("fetchAllQuotaWindows", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.mocked(withOperatorExecutionResources).mockClear();
+    vi.mocked(withHostExecutionResources).mockClear();
   });
 
   afterEach(() => {
@@ -46,9 +44,9 @@ describe("fetchAllQuotaWindows", () => {
     await vi.advanceTimersByTimeAsync(20_001);
     const results = await promise;
 
-    const calls = vi.mocked(withOperatorExecutionResources).mock.calls;
+    const calls = vi.mocked(withHostExecutionResources).mock.calls;
     expect(calls).toHaveLength(2);
-    expect(calls[1]![0].signal?.aborted).toBe(true);
+    expect(calls[1]![0]?.aborted).toBe(true);
 
     expect(results).toEqual([
       {

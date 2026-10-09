@@ -8,7 +8,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { prepareExecutionRunEnvelope } from "@paperclipai/adapter-utils/execution-run-envelope";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withExecutionResourceContext } from "@paperclipai/adapter-utils/execution-resource-context";
 import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "@paperclipai/adapter-utils/execution-resource-policy";
 import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
@@ -16,6 +16,10 @@ import { execFileWithResources } from "@paperclipai/adapter-utils/resource-buffe
 import { listActiveExecutionUnits } from "@paperclipai/adapter-utils/execution-resource-reconciliation";
 import { ensureSystemdExecutionSlice } from "@paperclipai/adapter-utils/systemd-execution-slice";
 import { withHostExecutionResources } from "./host-execution-resources.js";
+
+const quotaAdapter = vi.hoisted(() => ({ getQuotaWindows: vi.fn() }));
+vi.mock("../adapters/registry.js", () => ({ listServerAdapters: () => [{ type: "codex_local", getQuotaWindows: quotaAdapter.getQuotaWindows }] }));
+import { fetchAllQuotaWindows } from "./quota-windows.js";
 
 const slices: string[] = [];
 afterEach(async () => {
@@ -25,6 +29,9 @@ afterEach(async () => {
   }
 });
 const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTEMD === "1";
+beforeAll(() => {
+  if (enabled) expect(resolveExecutionResourcePolicy().isolation).toBe("systemd");
+});
 async function context() {
   const policy = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_MEMORY_MAX_MIB: "96",
     PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB: "96", PAPERCLIP_EXECUTION_CAPACITY_MIB: "192",
@@ -57,6 +64,25 @@ async function context() {
         root.child.kill("SIGKILL"); await root.completion;
       }
       expect(resources.admission.snapshot.active).toBe(0);
+    });
+  }, 15000);
+  it("polls UI quota in the helper lane while a retained agent owns the only agent slot", async () => {
+    const resources = await context();
+    await withExecutionResourceContext(resources, async () => {
+      const root = createResourceProcessLauncher({ runId: resources.runId })!({ command: process.execPath,
+        args: ["-e", "setInterval(()=>{},1000)"], cwd: process.cwd(), environment: { PATH: process.env.PATH } });
+      await root.ready;
+      quotaAdapter.getQuotaWindows.mockImplementation(async () => {
+        const result = await execFileWithResources(process.execPath,
+          ["-e", "console.log(require('fs').readFileSync('/proc/self/cgroup','utf8'))"], { timeout: 3000 });
+        expect(result.stdout).toContain("-helper.scope");
+        expect(result.stdout).toContain(resources.slice);
+        return { provider: "openai", ok: true, windows: [] };
+      });
+      try {
+        expect(await fetchAllQuotaWindows()).toEqual([{ provider: "openai", ok: true, windows: [] }]);
+        expect(resources.admission.snapshot).toEqual({ usedBytes: resources.policy.memoryMaxBytes, active: 1, queued: 0 });
+      } finally { root.child.kill("SIGKILL"); await root.completion; }
     });
   }, 15000);
   it("discovers a surviving helper's bounded budget and helper role from the OS", async () => {
