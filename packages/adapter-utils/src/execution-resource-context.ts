@@ -8,6 +8,8 @@ export interface ExecutionResourceContext {
   /** Controller-owned run identity for helper ownership and restart cleanup. */
   runId?: string;
   admissionKind?: "agent" | "helper";
+  /** Private controller lease retained across authenticated native turns. */
+  ownership?: ExecutionResourceOwnership;
   policy: ExecutionResourcePolicy;
   admission: ExecutionResourceAdmission;
   /** Root leases within an already-reserved, bounded run envelope. */
@@ -17,7 +19,8 @@ export interface ExecutionResourceContext {
   signal?: AbortSignal;
   /** Operator-owned packaged runner used for descriptor-preserving handoffs. */
   nativeLoaderCommand?: () => string;
-  onUnitPrepared?: (unit: { unit: string; memoryMaxBytes: number }) => Promise<void>;
+  onUnitPrepared?: (unit: { unit: string; memoryMaxBytes: number; originRunId?: string; previousRunId?: string }) => Promise<void>;
+  onOwnershipCommitted?: (claim: { previousRunId?: string; units: string[] }) => Promise<void>;
   onEvidence?: (evidence: ExecutionResourceEvidence) => Promise<void>;
 }
 
@@ -42,6 +45,7 @@ export async function withOperatorExecutionResources<T>(input: {
   nativeLoaderCommand?: () => string;
   onEvidence?: ExecutionResourceContext["onEvidence"];
   onUnitPrepared?: ExecutionResourceContext["onUnitPrepared"];
+  onOwnershipCommitted?: ExecutionResourceContext["onOwnershipCommitted"];
 }, execute: () => Promise<T>): Promise<T> {
   const policy = resolveExecutionResourcePolicy();
   const key = JSON.stringify([policy, input.slice]);
@@ -55,5 +59,80 @@ export async function withOperatorExecutionResources<T>(input: {
     return { admission, slice };
   })() };
   const initialized = await operatorAdmission.initialized;
-  return withExecutionResourceContext({ ...input, policy, ...initialized }, execute);
+  const context: ExecutionResourceContext = { ...input, policy, ...initialized };
+  const ownership = new ExecutionResourceOwnership({ ...context });
+  context.ownership = ownership;
+  context.onEvidence = result => ownership.evidence(result);
+  context.onUnitPrepared = unit => ownership.prepared(unit, unit.originRunId ?? input.runId);
+  return withExecutionResourceContext(context, execute);
+}
+
+/** Authority is held by the controller's private warm-session entry, never by
+ * provider output. Persist every verified unit before changing its event sink.
+ */
+export class ExecutionResourceOwnership {
+  private roots = new Set<{ unit?: string; memoryMaxBytes: number; originRunId?: string;
+    verify: () => Promise<void>; rebind: (signal?: AbortSignal) => void }>();
+  private moving: Promise<void> | undefined;
+  private transferred = false;
+  constructor(private context: ExecutionResourceContext) {}
+
+  assertLaunchAllowed(): void {
+    if (this.moving) throw new Error("Execution resource ownership handoff is pending");
+  }
+
+  register(root: { unit?: string; memoryMaxBytes: number; originRunId?: string; verify: () => Promise<void>; rebind: (signal?: AbortSignal) => void }): () => void {
+    this.assertLaunchAllowed();
+    const owned = { ...root, originRunId: root.originRunId ?? this.context.runId };
+    this.roots.add(owned);
+    return () => { this.roots.delete(owned); };
+  }
+
+  async prepared(unit: { unit: string; memoryMaxBytes: number; previousRunId?: string }, originRunId?: string): Promise<void> {
+    await this.moving;
+    await this.context.onUnitPrepared?.({ ...unit, ...(this.transferred && originRunId !== this.context.runId
+      ? { originRunId, previousRunId: unit.previousRunId ?? originRunId } : {}) });
+    // A retained factory can create a new control root using its original
+    // name prefix. Record its current owner before that root can spawn.
+    if (this.transferred && originRunId !== this.context.runId && unit.previousRunId === undefined) {
+      if (!this.context.onOwnershipCommitted) throw new Error("Retained execution ownership requires durable controller recording");
+      await this.context.onOwnershipCommitted({ previousRunId: originRunId, units: [unit.unit] });
+    }
+  }
+
+  async evidence(result: ExecutionResourceEvidence): Promise<void> {
+    // Completion during persistence must use the committed owner, not a stale
+    // callback captured when the native process first started.
+    await this.moving?.catch(() => {});
+    await this.context.onEvidence?.(result);
+  }
+
+  async handoff(next: ExecutionResourceContext): Promise<void> {
+    if (this.moving) throw new Error("Execution resource ownership handoff is pending");
+    if (next === this.context) return;
+    if (next.admission !== this.context.admission || next.slice !== this.context.slice
+      || JSON.stringify(next.policy) !== JSON.stringify(this.context.policy) || !next.runId || next.signal?.aborted) {
+      throw new Error("Execution resource ownership policy or admission changed");
+    }
+    if ([...this.roots].some(root => root.unit) && (!next.onUnitPrepared || !next.onOwnershipCommitted)) {
+      throw new Error("Retained execution ownership requires durable controller recording");
+    }
+    const previousRunId = this.context.runId;
+    const transfer = async () => {
+      for (const root of this.roots) await root.verify();
+      for (const root of this.roots) if (root.unit) await next.onUnitPrepared?.({ unit: root.unit,
+        memoryMaxBytes: root.memoryMaxBytes, originRunId: root.originRunId, previousRunId });
+      // Check again after durable IO. A stopped or replaced process cannot be
+      // adopted based only on a previously valid cgroup name.
+      for (const root of this.roots) await root.verify();
+      await next.onOwnershipCommitted?.({ previousRunId, units: [...this.roots].flatMap(root => root.unit ? [root.unit] : []) });
+      this.context = { ...next, onEvidence: next.ownership?.context.onEvidence ?? next.onEvidence,
+        onUnitPrepared: next.ownership?.context.onUnitPrepared ?? next.onUnitPrepared };
+      this.transferred = true;
+      next.ownership = this;
+      for (const root of this.roots) root.rebind(next.signal);
+    };
+    this.moving = transfer();
+    try { await this.moving; } finally { this.moving = undefined; }
+  }
 }

@@ -4736,7 +4736,7 @@ export async function runChildProcess(
             resourceBoundary = await prepareSystemdExecution({ runId, admissionKind: resources.admissionKind, command: target.command, args: target.args,
               cwd: target.cwd ?? opts.cwd, env: applyLowMemoryEnvironment({ ...mergedEnv, ...target.env }, resources.policy),
               policy: resources.policy, scratchDir: resources.scratchDir, slice: resources.slice });
-            await resources.onUnitPrepared?.({ unit: resourceBoundary.unit, memoryMaxBytes: resources.policy.memoryMaxBytes });
+            await resources.onUnitPrepared?.({ unit: resourceBoundary.unit, originRunId: runId, memoryMaxBytes: resources.policy.memoryMaxBytes });
             if (resources.signal?.aborted) throw new Error("Execution cancelled before launch");
           }
         } catch (error) {
@@ -4751,6 +4751,7 @@ export async function runChildProcess(
         }
         let child: ChildProcessWithEvents;
         try {
+          resources?.ownership?.assertLaunchAllowed();
           child = spawn(resourceBoundary?.command ?? target.command, resourceBoundary?.args ?? target.args, {
             cwd: target.cwd ?? opts.cwd,
             env: childEnv,
@@ -4798,11 +4799,22 @@ export async function runChildProcess(
         };
         const abort = () => { void cancelExecution().catch(error => onLogError(error, runId, "failed to cancel execution")); };
         resources?.signal?.addEventListener("abort", abort, { once: true });
+        let activeResourceSignal = resources?.signal;
+        const unregisterOwner = resourceBoundary && resources?.ownership?.register({
+          unit: resourceBoundary.unit, originRunId: runId, memoryMaxBytes: resources.policy.memoryMaxBytes,
+          verify: async () => { const identity = await identityPromise; if (!identity) throw new Error("Execution identity is missing"); await resourceBoundary!.verifyOwnership(identity.pid); },
+          rebind: next => {
+            activeResourceSignal?.removeEventListener("abort", abort);
+            activeResourceSignal = next;
+            activeResourceSignal?.addEventListener("abort", abort, { once: true });
+            if (activeResourceSignal?.aborted) abort();
+          },
+        });
         const sampleTimer = resourceBoundary ? setInterval(() => { void resourceBoundary.sample(); }, 500) : undefined;
         sampleTimer?.unref();
         let cleanupPromise: Promise<ExecutionResourceEvidence | undefined> | undefined;
         const cleanup = () => cleanupPromise ??= (async () => {
-          resources?.signal?.removeEventListener("abort", abort);
+          activeResourceSignal?.removeEventListener("abort", abort);
           clearTimeout(abortKillTimer);
           clearInterval(sampleTimer);
           await spawnPersistPromise;
@@ -4810,7 +4822,7 @@ export async function runChildProcess(
           // Never admit a successor before whole-unit cleanup has succeeded.
           release?.();
           await target.cleanup?.();
-          if (evidence) await resources?.onEvidence?.(evidence);
+          try { if (evidence) await resources?.onEvidence?.(evidence); } finally { if (unregisterOwner) unregisterOwner(); }
           if (identityFailure) throw identityFailure;
           return evidence;
         })();

@@ -48,6 +48,7 @@ export interface SystemdExecutionBoundary {
   args: string[];
   unit: string;
   sample: () => Promise<void>;
+  verifyOwnership: (pid: number) => Promise<void>;
   identity: () => Promise<{ pid: number; unit: string }>;
   signal: (signal: NodeJS.Signals) => Promise<void>;
   configureScope: (input: { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv }) => void;
@@ -101,7 +102,7 @@ export async function prepareSystemdExecution(input: {
   let configured = false;
   async function readProperties() {
     const { stdout } = await execFileAsync("systemctl", ["--user", "show", unit,
-      "--property=ControlGroup,Result,ExecMainCode,ExecMainStatus,ExecMainPID"], { timeout: 5_000 });
+      "--property=Id,ActiveState,MemoryMax,ControlGroup,Result,ExecMainCode,ExecMainStatus,ExecMainPID"], { timeout: 5_000 });
     const properties = Object.fromEntries(stdout.trim().split("\n").map(line => {
       const separator = line.indexOf("=");
       return [line.slice(0, separator), line.slice(separator + 1)];
@@ -148,6 +149,15 @@ export async function prepareSystemdExecution(input: {
         ? [input.nativeLoaderCommand!, "--resource-exec", invocationFile]
         : [process.execPath, "--input-type=commonjs", "-e", ENVIRONMENT_LOADER, invocationFile])],
     unit, sample,
+    verifyOwnership: async (pid: number) => {
+      const properties = await readProperties();
+      const actual = (await fs.readFile(`/proc/${pid}/cgroup`, "utf8")).split("\n").find(line => line.startsWith("0::"))?.slice(3);
+      if (finished || properties.Id !== unit || properties.ControlGroup !== actual
+        || actual?.split("/").at(-1) !== unit || Number(properties.MemoryMax) !== policy.memoryMaxBytes
+        || properties.ActiveState !== "active") throw new Error("Retained execution unit identity changed");
+      await sample();
+      if (evidence.resourceLimitReached) throw new Error("Retained execution unit already exceeded its resource limit");
+    },
     configureScope: invocation => {
       if (!input.scope || finished || configured) throw new Error("Only an unstarted scope can be configured");
       configured = true;

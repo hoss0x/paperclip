@@ -1,3 +1,4 @@
+import { currentExecutionResources, type ExecutionResourceOwnership } from "@paperclipai/adapter-utils/execution-resource-context";
 import { createResourceOpenCodeLauncher } from "./resource-opencode-launcher.js";
 import { createResourceAcpxCommands } from "./resource-acpx-commands.js";
 import { createResourceCodexTransport } from "./resource-codex-transport.js";
@@ -406,6 +407,7 @@ type WarmNativeSession = {
   networkAccess: boolean;
   session: NativeSession;
   ownerToken: symbol;
+  resourceOwnership?: ExecutionResourceOwnership;
   configDigest: string;
   ownerScope: string;
   companyId: string;
@@ -8123,6 +8125,7 @@ async function executePaperclipNativeSessionWithinScope(
     `native-warm-session:${input.execution.binding.runId}`,
   );
   let existingWarmSession: NativeSession | undefined;
+  let retainedResourceOwnership: ExecutionResourceOwnership | undefined;
   let managedCredentialSession: NativeSession | undefined;
   let githubAccess: NativeGitHubAccess | undefined;
   let releaseGitHubRun: (() => void) | undefined;
@@ -8177,6 +8180,7 @@ async function executePaperclipNativeSessionWithinScope(
         if (entry.idleTimer !== null) clearTimeout(entry.idleTimer);
         entry.idleTimer = null;
         existingWarmSession = entry.session;
+        retainedResourceOwnership = entry.resourceOwnership;
         githubAccess = entry.githubAccess;
       }
     } else {
@@ -8341,6 +8345,14 @@ async function executePaperclipNativeSessionWithinScope(
           executeNativeSession({
             getFreshSessionHandoff: input.getFreshSessionHandoff,
             onSessionAdmission: async () => {
+              const resources = currentExecutionResources();
+              if (existingWarmSession && resources?.policy.isolation === "systemd" && !retainedResourceOwnership) {
+                throw new Error("Retained execution ownership is missing");
+              }
+              if (retainedResourceOwnership) {
+                if (!resources) throw new Error("Retained execution resource context is missing");
+                await retainedResourceOwnership.handoff(resources);
+              }
               // Invalidate prior stop evidence before a backend can spawn.
               await appendHeartbeatRunEvent(input.db, {
                 companyId: input.execution.binding.companyId,
@@ -8518,6 +8530,7 @@ async function executePaperclipNativeSessionWithinScope(
                       : undefined,
                     session,
                     ownerToken: warmSessionOwnerToken,
+                    resourceOwnership: currentExecutionResources()?.ownership,
                     configDigest: warmConfigDigest,
                     ownerScope: nativeSessionOwnerScope(
                       input.execution, input.runnerExecutionTarget?.environmentId ?? null,

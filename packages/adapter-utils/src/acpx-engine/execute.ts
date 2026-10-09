@@ -1,4 +1,4 @@
-import { prepareAcpxRuntimeResources } from "./resource-runtime.js";
+import { prepareAcpxRuntimeResources, claimAcpxRuntimeResources } from "./resource-runtime.js";
 import { cancellableSandboxStartup } from "./startup-cancellation.js";
 import { withAdapterExecutionPhase, type AdapterExecutionPhase } from "../execution-phase.js";
 import fs from "node:fs/promises";
@@ -4319,6 +4319,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         // root span records this as `cold_start`.
         coldStart = !cached?.runtime;
         if (cached?.runtime) {
+          await claimAcpxRuntimeResources(cached.runtime);
           runtime = cached.runtime;
         } else {
           const createRuntimeStart = now();

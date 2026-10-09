@@ -18,7 +18,7 @@ export async function prepareExecutionRunEnvelope(input: { signal?: AbortSignal 
   if (!parent) throw new Error("Run envelopes require a configured aggregate slice");
   if (!/^paperclip-[a-zA-Z0-9-]+\.slice$/.test(parent)) throw new Error("Invalid execution parent slice");
   const cancelled = new AbortController();
-  const signal = AbortSignal.any([cancelled.signal, ...[input.signal, resources.signal].filter((value): value is AbortSignal => !!value)]);
+  let signal = AbortSignal.any([cancelled.signal, ...[input.signal, resources.signal].filter((value): value is AbortSignal => !!value)]);
   const release = await resources.admission.acquire(resources.policy.memoryMaxBytes, signal, resources.admissionKind);
   const slice = `${parent.slice(0, -6)}-run${randomUUID().replaceAll("-", "")}${resources.admissionKind === "helper" ? "helper" : ""}.slice`;
   const policy = resources.policy;
@@ -101,10 +101,23 @@ export async function prepareExecutionRunEnvelope(input: { signal?: AbortSignal 
       });
       closed = true;
       signal.removeEventListener("abort", abort);
+      unregisterOwner?.();
       release();
     })().catch(error => { closingPromise = undefined; throw error; });
   }
   const abort = () => { void close().catch(() => { /* Retain reservation; owner can retry cleanup. */ }); };
+  const unregisterOwner = resources.ownership?.register({ memoryMaxBytes: policy.memoryMaxBytes,
+    verify: async () => {
+      await sample();
+      if (closing || closed || resourceLimitReached) throw new Error("Retained run envelope is unavailable");
+    },
+    rebind: next => {
+      signal.removeEventListener("abort", abort);
+      signal = AbortSignal.any([cancelled.signal, ...(next ? [next] : [])]);
+      context.signal = signal;
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    } });
   let sampling = false;
   const samples = setInterval(() => {
     if (sampling || closing) return;

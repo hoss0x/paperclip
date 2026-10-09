@@ -78,3 +78,14 @@ it("rejects cleanup that leaves the unit active", async () => {
     ? `Id=${unit}\nControlGroup=${cgroup}\nMemoryMax=100` : args.includes("--property=LoadState") ? "loaded" : "active");
   await expect(recovered!.cleanup()).rejects.toThrow("termination was not verified");
 });
+
+it("accepts an authenticated transferred record while retaining the original OS name", async () => {
+  const dependencies = fixture();
+  const transferred = { ...record, originRunId: "run-1", previousRunId: "run-1" };
+  const recovered = await recoverExecutionUnit("run-2", [transferred], dependencies);
+  expect(await recovered!.signal("SIGTERM")).toBe(true);
+});
+it("rejects a transferred record whose origin does not match the verified unit", async () => {
+  await expect(recoverExecutionUnit("run-2", [{ ...record, originRunId: "foreign", previousRunId: "run-1" }], fixture()))
+    .rejects.toThrow("ownership is missing");
+});

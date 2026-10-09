@@ -39,6 +39,8 @@ export async function executeWithResourceGovernance(input: {
     nativeLoaderCommand: resolvePaperclipRunnerBinary,
     onUnitPrepared: async unit => input.record({ eventType: RESOURCE_UNIT_PREPARED,
       message: "Resource execution unit prepared", payload: unit }),
+    onOwnershipCommitted: async claim => input.record({ eventType: "execution_resource_claimed",
+      message: "Retained execution resources transferred to the active run", payload: claim }),
     onEvidence: async result => {
       evidence.push(result);
       await input.record({ eventType: RESOURCE_UNIT_FINISHED,

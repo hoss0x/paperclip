@@ -1,9 +1,19 @@
 import type { AcpRuntime, AcpRuntimeOptions } from "acpx/runtime";
 import { promises as fs, constants } from "node:fs";
 import path from "node:path";
-import { currentExecutionResources } from "../execution-resource-context.js";
+import { currentExecutionResources, type ExecutionResourceOwnership } from "../execution-resource-context.js";
 import { prepareExecutionRunEnvelope } from "../execution-run-envelope.js";
 import { launchResourceStdioProcess } from "../resource-stdio-process.js";
+
+const retainedOwners = new WeakMap<AcpRuntime, ExecutionResourceOwnership>();
+/** Called only after the host store has lent its authenticated warm handle. */
+export async function claimAcpxRuntimeResources(runtime: AcpRuntime): Promise<void> {
+  const owner = retainedOwners.get(runtime);
+  if (!owner) return;
+  const context = currentExecutionResources();
+  if (!context) throw new Error("Retained ACPX resource context is missing");
+  await owner.handoff(context);
+}
 
 /** The older ACP runtime owns provider and client-side terminal roots together.
  * Retain the reservation until runtime close and verified descendant cleanup.
@@ -47,7 +57,7 @@ export async function prepareAcpxRuntimeResources(input: { runId: string; cwd: s
     own(runtime: AcpRuntime): AcpRuntime {
       // Bind methods to the original runtime so private fields retain identity.
       // Closing can be retried if resource cleanup fails; capacity stays held.
-      return new Proxy(runtime, {
+      const proxy = new Proxy(runtime, {
         get(target, property) {
           if (property === "close") return async (...args: Parameters<AcpRuntime["close"]>) => {
             try { return await target.close(...args); } finally { await envelope.close(); }
@@ -56,6 +66,8 @@ export async function prepareAcpxRuntimeResources(input: { runId: string; cwd: s
           return typeof value === "function" ? value.bind(target) : value;
         },
       });
+      if (resources.ownership) retainedOwners.set(proxy, resources.ownership);
+      return proxy;
     },
   };
 }

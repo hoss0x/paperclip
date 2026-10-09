@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, desc, sql } from "drizzle-orm";
 import { heartbeatRunEvents, type Db } from "@paperclipai/db";
 
 const exec = promisify(execFile);
@@ -17,7 +17,7 @@ export interface RecoveredExecutionUnitDependencies {
  */
 export async function recoverExecutionUnit(
   runId: string,
-  records: { unit?: unknown; memoryMaxBytes?: unknown }[],
+  records: { unit?: unknown; memoryMaxBytes?: unknown; originRunId?: unknown; previousRunId?: unknown }[],
   dependencies: RecoveredExecutionUnitDependencies,
 ): Promise<{ signal: (signal: NodeJS.Signals) => Promise<boolean>; cleanup: () => Promise<void> } | null> {
   if (!await dependencies.isAlive()) throw new Error("Recovered execution process identity changed");
@@ -27,7 +27,11 @@ export async function recoverExecutionUnit(
   const prefix = `paperclip-execution-${runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-`;
   const record = records.find(record => record.unit === unit && Number.isSafeInteger(record.memoryMaxBytes)
     && Number(record.memoryMaxBytes) > 0);
-  if (!unit.startsWith(prefix) || !/^paperclip-execution-[a-zA-Z0-9-]+\.(service|scope)$/.test(unit) || !record) {
+  // Transferred authority is an authenticated controller event (the DB reader
+  // excludes provider-source events). The original unit name stays immutable.
+  const transferredPrefix = typeof record?.originRunId === "string" && typeof record.previousRunId === "string"
+    ? `paperclip-execution-${record.originRunId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-` : undefined;
+  if ((!unit.startsWith(prefix) && !(transferredPrefix && unit.startsWith(transferredPrefix))) || !/^paperclip-execution-[a-zA-Z0-9-]+\.(service|scope)$/.test(unit) || !record) {
     throw new Error("Recovered execution unit ownership is missing");
   }
   const verify = async () => {
@@ -71,7 +75,20 @@ export async function recoverRecordedExecutionUnit(db: Db, input: {
     eq(heartbeatRunEvents.companyId, input.companyId), eq(heartbeatRunEvents.runId, input.runId),
     eq(heartbeatRunEvents.eventType, "execution_resource_prepared"), isNull(heartbeatRunEvents.sourceEventId),
   ));
-  return recoverExecutionUnit(input.runId, rows.map(row => row.payload ?? {}), {
+  const records = rows.map(row => row.payload ?? {});
+  for (const record of records) {
+    if (typeof record.unit !== "string") continue;
+    const [latest] = await db.select({ runId: heartbeatRunEvents.runId })
+      .from(heartbeatRunEvents).where(and(eq(heartbeatRunEvents.companyId, input.companyId),
+        eq(heartbeatRunEvents.eventType, "execution_resource_claimed"), isNull(heartbeatRunEvents.sourceEventId),
+        sql`${heartbeatRunEvents.payload}->'units' ? ${record.unit}`))
+      .orderBy(desc(heartbeatRunEvents.id)).limit(1);
+    if (latest && latest.runId !== input.runId) throw new Error("Recovered execution unit belongs to a later run");
+    if (record.previousRunId && (!latest || latest.runId !== input.runId)) {
+      throw new Error("Recovered execution resource handoff was not committed");
+    }
+  }
+  return recoverExecutionUnit(input.runId, records, {
     isAlive: input.isAlive,
     readCgroup: () => readFile(`/proc/${input.pid}/cgroup`, "utf8"),
     systemctl: async args => (await exec("systemctl", ["--user", ...args], {

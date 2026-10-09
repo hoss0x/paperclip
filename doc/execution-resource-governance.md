@@ -550,3 +550,35 @@ passed. The complete test command reached its 900-second deadline without a
 complete suite result or an OOM. No larger memory ceiling was used. The branch
 and draft PR remain unready; packaged production and concurrent minimum VPS
 sizes are not established.
+
+## 2026-10-09: retained native ownership handoff
+
+The retained-run attribution defect above is fixed at the shared boundary.
+A private controller lease follows the warm session. At session admission it
+verifies each retained worker's PID, actual cgroup, active unit and hard memory
+limit. It records the incoming run's unit ownership and a committed claim before
+changing the resource recorder or cancellation signal. The original unit name
+and aggregate reservation stay unchanged. Evidence that arrives during the
+handoff waits for its result. Failed persistence keeps the previous owner.
+
+Direct stdio transports, runnerd child processes and shared ACPX run envelopes
+use this lease. Cached older ACPX runtimes claim it through their private host
+handle. New control roots from an older retained factory record their active
+owner before launch. Restart recovery accepts committed transfers with the
+original unit prefix and rejects an earlier run after a later claim. Provider
+output cannot supply these controller events.
+
+A real Node JSON-RPC transport and a private PostgreSQL database verify two
+runs. Run A opens the retained process. Run B reuses its same PID, triggers a
+96 MiB cgroup OOM and receives `execution_resource_limit`. Only Run B owns the
+persisted OOM evidence. Run A cannot recover the transferred unit. Detached
+children stop, and a later session succeeds. A separate test proves that Run A's
+later abort does not stop the transport, while Run B's abort does. Native
+executor fixtures also verify the authenticated warm admission hook.
+
+These checks fix correlation and authority. They do not complete packaged
+production or concurrent-development qualification. Full server semantic
+checking still exceeds the previously tested 2200 MiB envelope; its cause and
+safe development requirement remain unresolved. The previous full test command
+also lacks a complete result. No memory ceiling was raised, minimum VPS size is
+claimed, or live installation changed. The resource PR remains draft.

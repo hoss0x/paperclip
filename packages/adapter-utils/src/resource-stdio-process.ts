@@ -53,7 +53,7 @@ async function reserveStdioProcess(input: StdioLaunchInput): Promise<PreparedRes
   try {
     boundary = await prepareSystemdExecution({ ...input, admissionKind: resources.admissionKind, policy: resources.policy,
       env: applyLowMemoryEnvironment(input.env, resources.policy), scratchDir: resources.scratchDir, slice: resources.slice });
-    await resources.onUnitPrepared?.({ unit: boundary.unit, memoryMaxBytes: resources.policy.memoryMaxBytes });
+    await resources.onUnitPrepared?.({ unit: boundary.unit, originRunId: input.runId, memoryMaxBytes: resources.policy.memoryMaxBytes });
     if (cancellationSignal?.aborted) throw new Error("Execution cancelled before launch");
   } catch (error) {
     await boundary?.finish();
@@ -106,6 +106,7 @@ function spawnStdioProcess(input: StdioLaunchInput,
   // The systemd client needs the operator's user-manager connection variables.
   // Only the private invocation file supplies the provider's exact environment.
   if (input.extraStdio?.length && !input.scope) throw new Error("Inherited execution descriptors require a systemd scope");
+  resources.ownership?.assertLaunchAllowed();
   const child = spawn(owned.command, owned.args, { cwd: input.cwd, env: process.env,
     stdio: ["pipe", "pipe", "pipe", ...(input.extraStdio ?? [])], detached: input.detached ?? false }) as ChildProcessWithoutNullStreams;
   // Node flushes raw child pipes when the leader exits. Retain terminal output
@@ -132,6 +133,18 @@ function spawnStdioProcess(input: StdioLaunchInput,
     escalation ??= setTimeout(() => signal("SIGKILL"), 1_000);
   };
   cancellationSignal?.addEventListener("abort", abort, { once: true });
+  let activeSignal = cancellationSignal;
+  const unregisterOwner = resources.ownership?.register({ unit: owned.unit, originRunId: input.runId, memoryMaxBytes: resources.policy.memoryMaxBytes,
+    verify: async () => { await owned.verifyOwnership(worker.pid); },
+    rebind: next => {
+      activeSignal?.removeEventListener("abort", abort);
+      activeSignal = next;
+      activeSignal?.addEventListener("abort", abort, { once: true });
+      if (activeSignal?.aborted) abort();
+    } });
+  const report = async (evidence: Parameters<NonNullable<typeof resources.onEvidence>>[0]) => {
+    await resources.onEvidence?.(evidence);
+  };
   const samples = setInterval(() => { void owned.sample(); }, 500);
   samples.unref();
   const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -154,7 +167,7 @@ function spawnStdioProcess(input: StdioLaunchInput,
     const evidence = await owned.finish(cancelled);
     await closed;
     release();
-    await resources.onEvidence?.(evidence);
+    await report(evidence);
     const signalled = evidence.mainExitCode === 2 || evidence.mainExitCode === 3;
     return {
       code: signalled ? null : evidence.mainExitCode === 1 ? evidence.mainExitStatus : result.code,
@@ -163,12 +176,13 @@ function spawnStdioProcess(input: StdioLaunchInput,
   }, async error => {
     const evidence = await owned.finish(cancelled);
     release();
-    await resources.onEvidence?.(evidence);
+    await report(evidence);
     throw error;
   }).finally(() => {
     clearInterval(samples);
     clearTimeout(escalation);
-    cancellationSignal?.removeEventListener("abort", abort);
+    activeSignal?.removeEventListener("abort", abort);
+    unregisterOwner?.();
   });
   // Attach before returning/awaiting identity; short-lived failures cannot leak
   // an unhandled rejection while a protocol constructor is being prepared.
