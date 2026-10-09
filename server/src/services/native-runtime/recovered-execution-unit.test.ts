@@ -8,7 +8,7 @@ function fixture() {
   let stopped = false;
   const isAlive = vi.fn(async () => true);
   const readCgroup = vi.fn(async () => `0::${cgroup}\n`);
-  const systemctl = vi.fn(async (args: string[]) => {
+  const systemctl = vi.fn(async (args: string[]): Promise<string> => {
     if (args.includes("--property=Id")) return `Id=${unit}\nControlGroup=${cgroup}\nMemoryMax=100\n`;
     if (args.includes("--property=LoadState")) return "loaded";
     if (args[0] === "stop") stopped = true;
