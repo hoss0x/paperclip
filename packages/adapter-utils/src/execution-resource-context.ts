@@ -77,7 +77,10 @@ export class ExecutionResourceOwnership {
   private transferred = false;
   constructor(private context: ExecutionResourceContext) {}
 
-  get signal(): AbortSignal | undefined { return this.context.signal; }
+  get signal(): AbortSignal | undefined {
+    this.assertLaunchAllowed();
+    return this.context.signal;
+  }
 
   assertLaunchAllowed(): void {
     if (this.moving) throw new Error("Execution resource ownership handoff is pending");

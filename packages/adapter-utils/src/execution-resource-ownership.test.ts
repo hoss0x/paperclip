@@ -15,6 +15,18 @@ function fixture() {
   owner.register(root);
   return { a, b, owner, root };
 }
+it("fences new launch signals while durable handoff is pending", async () => {
+  const { b, owner } = fixture();
+  let release!: () => void;
+  const recording = new Promise<void>(resolve => { release = resolve; });
+  b.onOwnershipCommitted = vi.fn(() => recording);
+  const handoff = owner.handoff(b);
+  await expect.poll(() => vi.mocked(b.onOwnershipCommitted!).mock.calls.length).toBe(1);
+  try {
+    expect(() => owner.signal).toThrow("ownership handoff is pending");
+  } finally { release(); await handoff; }
+  expect(owner.signal).toBe(b.signal);
+});
 it("keeps the previous owner and cancellation authority when durable recording fails", async () => {
   const { a, b, owner, root } = fixture();
   b.onOwnershipCommitted = async () => { throw new Error("database unavailable"); };
