@@ -162,4 +162,9 @@ it("leaves one helper budget in default agent concurrency when capacity permits"
   expect(policy.capacityBytes - policy.maxConcurrent * policy.memoryMaxBytes).toBeGreaterThanOrEqual(policy.memoryMaxBytes);
   const small = resolveExecutionResourcePolicy({}, "linux", 2 * GiB);
   expect(small.maxConcurrent).toBe(1);
+  expect(small.memoryMaxBytes).toBe(512 * MiB);
+  for (const hostGiB of [2, 3, 4]) {
+    const defaults = resolveExecutionResourcePolicy({}, "linux", hostGiB * GiB);
+    expect(defaults.capacityBytes - defaults.maxConcurrent * defaults.memoryMaxBytes).toBeGreaterThanOrEqual(defaults.memoryMaxBytes);
+  }
 });

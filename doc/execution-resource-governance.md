@@ -121,7 +121,7 @@ measurement. They are not a minimum-VPS recommendation.
 | `PAPERCLIP_EXECUTION_ISOLATION` | `auto`: systemd on Linux, `none` elsewhere |
 | `PAPERCLIP_EXECUTION_RESERVE_MIB` | Greater of 1024 MiB and 25% of host RAM |
 | `PAPERCLIP_EXECUTION_CAPACITY_MIB` | Host RAM minus reserve |
-| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and capacity |
+| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and half the capacity |
 | `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | Equal to the hard limit; lower thresholds are opt-in |
 | `PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB` | 0 |
 | `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Up to 2; leave one helper budget when possible, with at least one agent slot |
@@ -450,7 +450,7 @@ The previously failing dependent-helper fixture now completes alongside its
 persistent root with one agent slot and 192 MiB total capacity. Real tests check
 helper cgroup membership, OS role discovery, grouped helper accounting and
 capacity exhaustion. When agents reserve all aggregate bytes, unrelated helpers
-still queue and can time out. Default agent concurrency leaves one full helper budget when capacity permits.
+still queue and can time out. Default workload budgets and agent concurrency leave one full helper budget, including on smaller hosts.
 Explicit concurrency overrides must leave memory capacity for controller
 helpers if they need those helpers to progress beside fully reserved sessions;
 this implementation does not associate unrelated UI requests with an agent's
@@ -582,3 +582,54 @@ checking still exceeds the previously tested 2200 MiB envelope; its cause and
 safe development requirement remain unresolved. The previous full test command
 also lacks a complete result. No memory ceiling was raised, minimum VPS size is
 claimed, or live installation changed. The resource PR remains draft.
+
+
+## 2026-10-09: compiler development budget investigation
+
+The native TypeScript 7 compiler completes full server semantic checking in
+single-thread mode inside a 4096 MiB validation unit with `GOMEMLIMIT=3072MiB`.
+The first completed diagnostic reported two type defects, now corrected, rather
+than a resource termination. It checked 5721 files and 1,655,459 lines, created
+1,670,686 types and 10,497,331 instantiations, and retained about 2.9 GiB after
+forced collection. Its live sampled unit peak was 4068.1 MiB, including profiling.
+The heap profile attributes retained data to AST nodes, symbols and instantiated
+types; this is a large compiler working set, not evidence of a runtime leak.
+
+The default compiler worker pool exhausted the same 4096 MiB unit despite
+`GOMAXPROCS=1`. Server build and typecheck now explicitly use the compiler's
+supported `--singleThreaded` option. This keeps all semantic and declaration
+checks and all original source roots. It changes development concurrency, not
+production execution policy. Full repository validation of this setting is
+recorded separately below when complete. These compiler measurements alone do
+not establish a minimum production VPS size.
+
+Final review also found that quota polls still occupied the agent admission
+lane. They now use the same bounded controller-helper lane as other UI helpers,
+so a retained native session cannot consume the only slot needed by a quota
+poll. Aggregate memory admission, poll cancellation and finite deadlines remain
+in effect. A real retained-root/cgroup regression covers the poll entrypoint.
+
+
+A complete semantic-only check, with the original 5721 files, passed at a sampled
+3634.7 MiB unit peak. `--noEmit` alone still performs declaration diagnostics;
+the typecheck command now disables declaration generation and declaration maps.
+The full build remains responsible for declaration validation and emission.
+A production build config excludes colocated `*.test.ts` roots, which are still
+included in the normal typecheck. Production artifacts need not contain test
+modules or their declaration files. The corrected full production JS/declaration
+emit passed inside the same 4096 MiB ceiling. The first scratch config was invalid
+because its location changed Node type-library lookup; its results are discarded.
+No checks use `--noCheck`, and no compiler source roots are removed from the
+normal server typecheck. Garbage-collection tuning alone did not fix the peak.
+
+
+Packaged qualification uses the published dependency graph with source files
+removed and Node TypeScript stripping disabled. It found two real distribution
+errors that workspace imports hid: the direct Codex transport imported the
+private runner package, and the flattened vendor layout selected the wrong
+native binary path. The transport now uses the relative vendor boundary; native
+binary selection first checks the adjacent packaged `bin` directory. The ACPX
+installation probe also uses the relative live vendor entry. Build-time checks
+reject private runner imports in compiled server modules and verify dependencies
+for all three vendor entry points. Real staged-package tests and isolated
+packaged startup are required in addition to source-mode tests.

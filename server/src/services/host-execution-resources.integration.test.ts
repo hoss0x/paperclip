@@ -43,6 +43,26 @@ async function context() {
     admission: new ExecutionResourceAdmission(policy.capacityBytes, 1, 1) };
 }
 (enabled ? describe : describe.skip)("host helper admission", () => {
+  it.each([2, 4])("admits a dependent helper under defaults for a %i GiB host", async (hostGiB) => {
+    const policy = resolveExecutionResourcePolicy({}, "linux", hostGiB * 1024 ** 3);
+    const slice = await ensureSystemdExecutionSlice(policy, `paperclip-smallhelper${randomUUID().replaceAll("-", "")}.slice`);
+    slices.push(slice);
+    const resources = { runId: randomUUID(), policy, slice, scratchDir: process.env.PAPERCLIP_SCRATCH_DIR!,
+      nativeLoaderCommand: () => process.env.PAPERCLIP_TEST_RESOURCE_LOADER!,
+      admission: new ExecutionResourceAdmission(policy.capacityBytes, policy.maxConcurrent, policy.helperMaxConcurrent) };
+    await withExecutionResourceContext(resources, async () => {
+      const root = createResourceProcessLauncher({ runId: resources.runId })!({ command: process.execPath,
+        args: ["-e", "setInterval(()=>{},1000)"], cwd: process.cwd(), environment: { PATH: process.env.PATH } });
+      await root.ready;
+      try {
+        const result = await withHostExecutionResources(undefined, () => execFileWithResources(process.execPath,
+          ["-e", "console.log('dependent helper completed')"], { timeout: 3000 }));
+        expect(result.stdout).toBe("dependent helper completed\n");
+        expect(resources.admission.snapshot.usedBytes).toBe(policy.memoryMaxBytes);
+      } finally { root.child.kill("SIGKILL"); await root.completion; }
+      expect(resources.admission.snapshot).toEqual({ usedBytes: 0, active: 0, queued: 0 });
+    });
+  }, 15000);
   it("executes a helper beside a persistent agent and records its actual sibling cgroup", async () => {
     const resources = await context();
     await withExecutionResourceContext(resources, async () => {

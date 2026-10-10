@@ -43,7 +43,9 @@ export function resolveExecutionResourcePolicy(
   }
   const reserveBytes = integer(env, "PAPERCLIP_EXECUTION_RESERVE_MIB", Math.ceil(Math.max(GiB, hostMemoryBytes / 4) / MiB)) * MiB;
   const capacityBytes = integer(env, "PAPERCLIP_EXECUTION_CAPACITY_MIB", Math.floor((hostMemoryBytes - reserveBytes) / MiB)) * MiB;
-  const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes) / MiB)) * MiB;
+  // Retained agents need a full helper budget to make progress on small hosts.
+  // Explicit operator limits remain authoritative.
+  const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes / 2) / MiB)) * MiB;
   // A lower memory.high can throttle unreclaimable compiler/provider pages
   // indefinitely before memory.max is reached. Default to the hard boundary;
   // operators can opt into a measured lower soft threshold.
