@@ -642,6 +642,9 @@ PID/cgroup verification alone does not bind cancellation: the runner must first
 authenticate its durable protocol authority. Warm admission then transfers this
 replacement lease to the active run, including cancellation and OOM evidence.
 Failed cleanup retains ownership for retry.
+Failed systemd units are reset after terminal evidence persistence succeeds.
+A recorder failure preserves their terminal state so a retry can save the same
+evidence; repeated failed runs do not accumulate stale unit metadata.
 
 A real PostgreSQL/systemd regression starts an independent retained process,
 recovers it under Run A, and transfers the same PID to Run B. Run A cancellation

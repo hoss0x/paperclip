@@ -132,3 +132,16 @@ it("restores current-run cancellation only after authentication and moves it at 
     expect(nextEvidence).toHaveBeenCalledWith(expect.objectContaining({ unit, cancelled: true }));
   } finally { await recovered!.cleanup(); }
 });
+
+it("keeps failed-unit evidence on recorder failure and resets the unit only after persistence succeeds", async () => {
+  const { context, recordEvidence } = resourceContext(new AbortController().signal);
+  const dependencies = fixture();
+  const recovered = await withExecutionResourceContext(context, () => recoverExecutionUnit("run-1", [record], dependencies));
+  await recovered!.onAuthenticated();
+  recordEvidence.mockRejectedValueOnce(new Error("record unavailable"));
+  await expect(recovered!.cleanup()).rejects.toThrow("record unavailable");
+  expect(dependencies.systemctl).not.toHaveBeenCalledWith(["reset-failed", unit]);
+  await recovered!.cleanup();
+  expect(recordEvidence).toHaveBeenCalledTimes(2);
+  expect(dependencies.systemctl).toHaveBeenCalledWith(["reset-failed", unit]);
+});

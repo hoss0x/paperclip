@@ -87,6 +87,7 @@ const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTE
       expect(events.some(event => event.runId === runB && event.eventType === "execution_resource_claimed" &&
         Array.isArray(event.payload?.units) && event.payload.units.includes(unit))).toBe(true);
       await expect.poll(() => alive(ids.child), { timeout: 5000 }).toBe(false);
+      await expect.poll(async () => (await ctl(["show", unit, "--property=LoadState", "--value"])).trim(), { timeout: 5000 }).toBe("not-found");
       const runC = randomUUID();
       const later = await run(runC, new AbortController().signal, async () => {
         await expect.poll(() => currentExecutionResources()!.admission.snapshot.active, { timeout: 5000 }).toBe(0);

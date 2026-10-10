@@ -109,6 +109,9 @@ export async function recoverExecutionUnit(
         await resources?.onEvidence?.({ ...evidence });
         reported = true;
       }
+      // Failed units retain their terminal state until reset. Persist evidence
+      // first; a recorder failure must leave that state available for retry.
+      if (load.trim() !== "not-found") await dependencies.systemctl(["reset-failed", unit]).catch(() => {});
       clearInterval(samples);
       activeSignal?.removeEventListener("abort", abort);
       unregister?.();
