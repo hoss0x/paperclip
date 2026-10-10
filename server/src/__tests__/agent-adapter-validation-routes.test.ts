@@ -357,6 +357,12 @@ describe("agent routes adapter validation", () => {
     }));
     await unregisterTestAdapter("external_test");
     await unregisterTestAdapter(missingAdapterType);
+    // Cold route transformation is fixture setup. Keep the request deadline
+    // independent of compiler work on a CPU-limited validation host.
+    await Promise.all([
+      vi.importActual("../routes/agents.js"),
+      vi.importActual("../middleware/index.js"),
+    ]);
   });
 
   afterEach(async () => {
