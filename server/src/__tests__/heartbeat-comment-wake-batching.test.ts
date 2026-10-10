@@ -1007,7 +1007,12 @@ describeEmbeddedPostgres("heartbeat comment wake batching", () => {
 
       expect(followupRun).toBeNull();
 
-      await heartbeat.cancelRun(firstRun!.id);
+      // The gateway does not support verified remote cancellation. Stop must
+      // report that uncertainty while preserving the reconciliation fence.
+      await expect(heartbeat.cancelRun(firstRun!.id)).rejects.toMatchObject({
+        status: 409,
+        message: "Execution ended, but provider termination could not be verified. Inspect the stopped run before continuing.",
+      });
 
       gateway.releaseFirstWait();
       await heartbeat.reconcileStrandedAssignedIssues();
