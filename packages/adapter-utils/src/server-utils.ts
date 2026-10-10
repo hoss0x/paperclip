@@ -4961,12 +4961,20 @@ export async function runChildProcess(
         });
 
         const stdin = child.stdin;
+        let stdinFailure: Error | undefined;
         if (opts.stdin != null && stdin) {
-          void spawnPersistPromise.finally(() => {
+          const handleStdinError = (error: NodeJS.ErrnoException) => {
+            // A command can close input before consuming it. Its exit status
+            // remains authoritative; the pipe error must not crash the server.
+            if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") return;
+            stdinFailure = error;
+            signalRunningProcess(running, "SIGKILL");
+          };
+          stdin.on("error", handleStdinError);
+          void spawnPersistPromise.then(() => {
             if (child.killed || stdin.destroyed) return;
-            stdin.write(opts.stdin as string);
-            stdin.end();
-          });
+            stdin.end(opts.stdin as string);
+          }).catch(handleStdinError);
         }
 
         child.on("error", (err: Error) => {
@@ -4999,6 +5007,7 @@ export async function runChildProcess(
               void Promise.resolve()
                 .then(() => cleanup())
                 .then((resourceUsage) => {
+                  if (stdinFailure) throw new Error(`Failed to write command input: ${stdinFailure.message}`, { cause: stdinFailure });
                   const workerSignalled = resourceUsage?.mainExitCode === 2 || resourceUsage?.mainExitCode === 3;
                   const workerSignal = workerSignalled
                     ? Object.entries(os.constants.signals).find(([, value]) => value === resourceUsage?.mainExitStatus)?.[0] ?? signal

@@ -568,6 +568,33 @@ describe("adapter skill snapshots", () => {
 });
 
 describe("runChildProcess", () => {
+  it("keeps the child exit result when the child closes stdin before consuming input", async () => {
+    let inputClosed!: () => void;
+    const ready = new Promise<void>(resolve => { inputClosed = resolve; });
+    const runId = randomUUID();
+    const result = await runChildProcess(runId, process.execPath, ["-e", "require('node:fs').closeSync(0);process.stdout.write('input closed');setTimeout(()=>process.exit(7),250);"], {
+      cwd: process.cwd(), env: {}, stdin: "x".repeat(2 * 1024 * 1024), timeoutSec: 5, graceSec: 1,
+      onLog: async (stream, text) => { if (stream === "stdout" && text.includes("input closed")) inputClosed(); },
+      onSpawn: async () => { await ready; },
+    });
+    expect(result.exitCode).toBe(7);
+    expect(result.signal).toBeNull();
+    expect(result.timedOut).toBe(false);
+    expect(runningProcesses.has(runId)).toBe(false);
+  });
+
+  it("reports an unexpected input error after stopping and cleaning the command", async () => {
+    const runId = randomUUID();
+    await expect(runChildProcess(runId, process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      cwd: process.cwd(), env: {}, stdin: "input", timeoutSec: 5, graceSec: 1,
+      onLog: async () => {},
+      onSpawn: async () => {
+        runningProcesses.get(runId)?.child.stdin?.emit("error", Object.assign(new Error("fixture input failure"), { code: "EIO" }));
+      },
+    })).rejects.toThrow("Failed to write command input: fixture input failure");
+    expect(runningProcesses.has(runId)).toBe(false);
+  });
+
   it("does not arm a timeout when timeoutSec is 0", async () => {
     const result = await runChildProcess(
       randomUUID(),

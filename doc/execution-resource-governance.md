@@ -655,3 +655,11 @@ it returns no resource-limit classification. Authentication and cancellation
 unit regressions cover the authority boundary separately.
 The same real regression also waits for the survivor reservation to release,
 then proves a later bounded command succeeds without resource-limit evidence.
+
+### Early input closure (2026-10-10)
+
+The shared command launcher handles stdin pipe errors. If a command closes input
+early, `EPIPE` preserves the command's exit result instead of raising an unhandled
+server error. Unexpected input errors stop the command and reject only after
+cleanup. Real subprocess regressions cover both paths, alongside the existing
+stdin, cancellation, descendant cleanup and resource ownership cases.
