@@ -633,3 +633,20 @@ installation probe also uses the relative live vendor entry. Build-time checks
 reject private runner imports in compiled server modules and verify dependencies
 for all three vendor entry points. Real staged-package tests and isolated
 packaged startup are required in addition to source-mode tests.
+
+### Recovered controller resource ownership (2026-10-10)
+
+Authenticated restart recovery now restores the resource lease and terminal
+memory evidence recorder before a recovered native transport can be retained.
+PID/cgroup verification alone does not bind cancellation: the runner must first
+authenticate its durable protocol authority. Warm admission then transfers this
+replacement lease to the active run, including cancellation and OOM evidence.
+Failed cleanup retains ownership for retry.
+
+A real PostgreSQL/systemd regression starts an independent retained process,
+recovers it under Run A, and transfers the same PID to Run B. Run A cancellation
+does not stop it. Run B exceeds its 96 MiB budget and receives
+`execution_resource_limit` and the sole terminal OOM record. The detached child
+is removed. The old recovery implementation fails this exact regression because
+it returns no resource-limit classification. Authentication and cancellation
+unit regressions cover the authority boundary separately.

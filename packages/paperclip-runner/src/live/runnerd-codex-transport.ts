@@ -1259,6 +1259,7 @@ export interface CapabilityRunnerdCodexTransportOptions {
     signal?: (signal: NodeJS.Signals) => Promise<boolean> | boolean;
     /** Whole-unit containment captured by the controller from durable ownership. */
     cleanup?: () => Promise<void>;
+    onAuthenticated?: () => Promise<void>;
   };
 }
 
@@ -6488,6 +6489,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       throw failure;
     }
     this.#adoptedRunnerAuthenticated = true;
+    await adoptedRunner.onAuthenticated?.();
     this.#diagnostic(
       `adopted runner ${adoptedRunner.pid} authenticated to its durable PRP authority`,
     );

@@ -12466,6 +12466,7 @@ async function createRunnerdBackendWithinSessionClaim(
             signal: (signal: NodeJS.Signals) =>
               recoveredUnit ? recoveredUnit.signal(signal) : signalVerifiedRecoveryProcess(localRecoveryProcess, signal),
             cleanup: recoveredUnit?.cleanup,
+            onAuthenticated: recoveredUnit?.onAuthenticated,
           }
         : undefined;
   if (adoptedProcess && remoteTarget) {

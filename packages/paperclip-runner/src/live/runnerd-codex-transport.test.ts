@@ -6983,6 +6983,7 @@ async function verifyLiveRunnerAdoption(
   const cleanup = vi.fn(async () => {
     if (failCleanup) throw new Error("owned execution unit still alive");
   });
+  const onAuthenticated = vi.fn(async () => undefined);
   server.on("upgrade", (request, socket, head) => {
     if (!authority) {
       socket.destroy();
@@ -7118,6 +7119,7 @@ async function verifyLiveRunnerAdoption(
         startedAt: new Date().toISOString(),
         signal,
         cleanup,
+        onAuthenticated,
         isAlive: () => {
           try {
             process.kill(runnerPid!, 0);
@@ -7142,6 +7144,7 @@ async function verifyLiveRunnerAdoption(
       expect(signal).not.toHaveBeenCalled();
       expect(checkpoint).not.toHaveBeenCalled();
       expect(cleanup).not.toHaveBeenCalled();
+      expect(onAuthenticated).not.toHaveBeenCalled();
       expect(duplicateLauncher).not.toHaveBeenCalled();
       expect(() => process.kill(runnerPid!, 0)).not.toThrow();
       const retained = JSON.parse(
@@ -7239,7 +7242,10 @@ async function verifyLiveRunnerAdoption(
       );
     }
     await rm(stateDirectory, { recursive: true, force: true });
-    if (adopted && !mismatchedArtifact && !detachBeforeCleanup) expect(cleanup).toHaveBeenCalledOnce();
+    if (adopted && !mismatchedArtifact && !detachBeforeCleanup) {
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(onAuthenticated).toHaveBeenCalledOnce();
+    }
   }
 }
 

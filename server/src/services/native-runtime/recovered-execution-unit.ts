@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { and, eq, isNull, desc, sql } from "drizzle-orm";
 import { heartbeatRunEvents, type Db } from "@paperclipai/db";
+import { currentExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import type { ExecutionResourceEvidence } from "@paperclipai/adapter-utils/systemd-execution";
 
 const exec = promisify(execFile);
 export interface RecoveredExecutionUnitDependencies {
@@ -19,7 +21,7 @@ export async function recoverExecutionUnit(
   runId: string,
   records: { unit?: unknown; memoryMaxBytes?: unknown; originRunId?: unknown; previousRunId?: unknown }[],
   dependencies: RecoveredExecutionUnitDependencies,
-): Promise<{ signal: (signal: NodeJS.Signals) => Promise<boolean>; cleanup: () => Promise<void> } | null> {
+): Promise<{ signal: (signal: NodeJS.Signals) => Promise<boolean>; cleanup: () => Promise<void>; onAuthenticated: () => Promise<void> } | null> {
   if (!await dependencies.isAlive()) throw new Error("Recovered execution process identity changed");
   const cgroup = (await dependencies.readCgroup()).split("\n").find(line => line.startsWith("0::"))?.slice(3);
   const unit = cgroup?.split("/").at(-1);
@@ -46,25 +48,115 @@ export async function recoverExecutionUnit(
   if (!await dependencies.isAlive() || (await dependencies.readCgroup()).split("\n").find(line => line.startsWith("0::")) !== `0::${cgroup}`) {
     throw new Error("Recovered execution process identity changed");
   }
-  return {
-    signal: async signal => {
+  const resources = currentExecutionResources();
+  const evidence: ExecutionResourceEvidence = {
+    unit, memoryMaxBytes: Number(record.memoryMaxBytes), memoryHighBytes: Number(record.memoryMaxBytes),
+    memorySwapMaxBytes: 0, peakMemoryBytes: null, result: null, resourceLimitReached: false,
+    mainExitCode: null, mainExitStatus: null, cancelled: false,
+  };
+  let authenticated = false;
+  let reported = false;
+  let samples: NodeJS.Timeout | undefined;
+  let unregister: (() => void) | undefined;
+  let activeSignal: AbortSignal | undefined;
+  let closing: Promise<void> | undefined;
+  async function sample(properties = false) {
+    try {
+      const [peak, events] = await Promise.all([
+        readFile(`/sys/fs/cgroup${cgroup}/memory.peak`, "utf8"),
+        readFile(`/sys/fs/cgroup${cgroup}/memory.events`, "utf8"),
+      ]);
+      const bytes = Number(peak.trim());
+      if (Number.isSafeInteger(bytes)) evidence.peakMemoryBytes = Math.max(evidence.peakMemoryBytes ?? 0, bytes);
+      evidence.resourceLimitReached ||= /^oom_kill [1-9]\d*$/m.test(events);
+    } catch { /* Keep measurements when systemd removes the cgroup after exit. */ }
+    if (!properties) return;
+    const values = Object.fromEntries((await dependencies.systemctl(["show", unit,
+      "--property=MemoryHigh,MemorySwapMax,MemoryPeak,Result,ExecMainCode,ExecMainStatus",
+    ])).trim().split("\n").map(line => { const index = line.indexOf("="); return [line.slice(0, index), line.slice(index + 1)]; }));
+    for (const [property, field] of [["MemoryHigh", "memoryHighBytes"], ["MemorySwapMax", "memorySwapMaxBytes"],
+      ["ExecMainCode", "mainExitCode"], ["ExecMainStatus", "mainExitStatus"]] as const) {
+      const value = values[property];
+      if (value && Number.isSafeInteger(Number(value))) evidence[field] = Number(value);
+    }
+    const peak = Number(values.MemoryPeak);
+    if (values.MemoryPeak && Number.isSafeInteger(peak)) evidence.peakMemoryBytes = Math.max(evidence.peakMemoryBytes ?? 0, peak);
+    evidence.result = values.Result || evidence.result;
+    evidence.resourceLimitReached ||= values.Result === "oom-kill";
+  }
+  const recovered = {
+    signal: async (signal: NodeJS.Signals) => {
       if (!await dependencies.isAlive()) return false;
       if (!(await dependencies.readCgroup()).split("\n").includes(`0::${cgroup}`)) throw new Error("Recovered execution process moved");
       await verify();
       await dependencies.systemctl(["kill", "--kill-whom=all", `--signal=${signal}`, unit]);
       return true;
     },
-    cleanup: async () => {
+    cleanup: (): Promise<void> => closing ??= (async () => {
+      if (authenticated) await sample(true);
       const load = await dependencies.systemctl(["show", unit, "--property=LoadState", "--value"]);
-      if (load.trim() === "not-found") return;
-      const previousState = await dependencies.systemctl(["show", unit, "--property=ActiveState", "--value"]);
-      if (["inactive", "failed"].includes(previousState.trim())) return;
+      if (load.trim() !== "not-found") {
+        const previousState = await dependencies.systemctl(["show", unit, "--property=ActiveState", "--value"]);
+        if (!["inactive", "failed"].includes(previousState.trim())) {
+          await verify();
+          await dependencies.systemctl(["stop", unit]);
+          const state = await dependencies.systemctl(["show", unit, "--property=ActiveState", "--value"]);
+          if (!["inactive", "failed"].includes(state.trim())) throw new Error("Recovered execution unit termination was not verified");
+        }
+        if (authenticated) await sample(true);
+      }
+      if (authenticated && !reported) {
+        await resources?.onEvidence?.({ ...evidence });
+        reported = true;
+      }
+      clearInterval(samples);
+      activeSignal?.removeEventListener("abort", abort);
+      unregister?.();
+    })().catch(error => { closing = undefined; throw error; }),
+    // PID/cgroup verification alone does not authorize a replacement controller
+    // to subscribe cancellation or take the retained lease. PRP authenticates first.
+    onAuthenticated: async () => {
+      if (authenticated || resources?.policy.isolation !== "systemd") return;
+      await sample(true);
+      if (!await dependencies.isAlive()) {
+        if (evidence.resourceLimitReached) {
+          authenticated = true;
+          await recovered.cleanup();
+          throw new Error("Recovered execution unit exceeded its resource limit");
+        }
+        throw new Error("Recovered execution process identity changed");
+      }
       await verify();
-      await dependencies.systemctl(["stop", unit]);
-      const state = await dependencies.systemctl(["show", unit, "--property=ActiveState", "--value"]);
-      if (!["inactive", "failed"].includes(state.trim())) throw new Error("Recovered execution unit termination was not verified");
+      if (!(await dependencies.readCgroup()).split("\n").includes(`0::${cgroup}`)) throw new Error("Recovered execution process moved");
+      unregister = resources.ownership?.register({ unit, memoryMaxBytes: Number(record.memoryMaxBytes),
+        originRunId: typeof record.originRunId === "string" ? record.originRunId : runId,
+        verify: async () => {
+          if (closing || !await dependencies.isAlive()) throw new Error("Recovered execution process identity changed");
+          if (!(await dependencies.readCgroup()).split("\n").includes(`0::${cgroup}`)) throw new Error("Recovered execution process moved");
+          await verify(); await sample(true);
+          if (evidence.resourceLimitReached) throw new Error("Recovered execution unit exceeded its resource limit");
+        },
+        rebind: signal => bindSignal(signal),
+      });
+      authenticated = true;
+      let sampling = false;
+      samples = setInterval(() => {
+        if (sampling || closing) return;
+        sampling = true;
+        void sample().finally(() => { sampling = false; });
+      }, 250);
+      samples.unref();
+      bindSignal(resources.signal);
     },
   };
+  const abort = () => { evidence.cancelled = true; void recovered.cleanup().catch(() => { /* Retain ownership on failed cleanup. */ }); };
+  function bindSignal(signal?: AbortSignal) {
+    activeSignal?.removeEventListener("abort", abort);
+    activeSignal = signal;
+    activeSignal?.addEventListener("abort", abort, { once: true });
+    if (activeSignal?.aborted) abort();
+  }
+  return recovered;
 }
 
 export async function recoverRecordedExecutionUnit(db: Db, input: {
