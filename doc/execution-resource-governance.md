@@ -650,3 +650,5 @@ does not stop it. Run B exceeds its 96 MiB budget and receives
 is removed. The old recovery implementation fails this exact regression because
 it returns no resource-limit classification. Authentication and cancellation
 unit regressions cover the authority boundary separately.
+The same real regression also waits for the survivor reservation to release,
+then proves a later bounded command succeeds without resource-limit evidence.

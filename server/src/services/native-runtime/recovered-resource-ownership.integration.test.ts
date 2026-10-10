@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { agents, companies, createDb, heartbeatRuns, heartbeatRunEvents } from "@paperclipai/db";
 import type { AdapterExecutionResult } from "@paperclipai/adapter-utils";
 import { currentExecutionResources, type ExecutionResourceOwnership } from "@paperclipai/adapter-utils/execution-resource-context";
+import { execFileWithResources } from "@paperclipai/adapter-utils/resource-buffered-command";
 import { startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { executeWithResourceGovernance } from "../execution-resources.js";
 import { recoverRecordedExecutionUnit } from "./recovered-execution-unit.js";
@@ -86,7 +87,16 @@ const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTE
       expect(events.some(event => event.runId === runB && event.eventType === "execution_resource_claimed" &&
         Array.isArray(event.payload?.units) && event.payload.units.includes(unit))).toBe(true);
       await expect.poll(() => alive(ids.child), { timeout: 5000 }).toBe(false);
-      await writeFile(`${process.env.PAPERCLIP_SCRATCH_DIR}/recovered-ownership-evidence.json`, JSON.stringify({ runA, runB, ids, result, events }, null, 2));
+      const runC = randomUUID();
+      const later = await run(runC, new AbortController().signal, async () => {
+        await expect.poll(() => currentExecutionResources()!.admission.snapshot.active, { timeout: 5000 }).toBe(0);
+        const output = await execFileWithResources(process.execPath, ["-e", "console.log('recovered')"], { timeout: 5000 });
+        expect(output.stdout.trim()).toBe("recovered");
+        return success();
+      });
+      expect(later.exitCode).toBe(0);
+      expect(later.errorCode).toBeUndefined();
+      await writeFile(`${process.env.PAPERCLIP_SCRATCH_DIR}/recovered-ownership-evidence.json`, JSON.stringify({ runA, runB, runC, ids, result, later, events }, null, 2));
     } finally {
       await recovered?.cleanup().catch(() => {});
       await ctl(["stop", unit]).catch(() => {});
