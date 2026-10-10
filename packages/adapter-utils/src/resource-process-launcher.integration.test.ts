@@ -2,11 +2,49 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "./execution-resource-policy.js";
-import { withExecutionResourceContext } from "./execution-resource-context.js";
+import { ExecutionResourceOwnership, withExecutionResourceContext, type ExecutionResourceContext } from "./execution-resource-context.js";
 import { createResourceProcessLauncher } from "./resource-process-launcher.js";
 
 const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTEMD === "1";
 (enabled ? describe : describe.skip)("native synchronous resource launcher seam", () => {
+  it("uses current-run cancellation for a new root from a retained launcher", async () => {
+    const policy = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_MEMORY_MAX_MIB: "96" }, "linux", 8 * 1024 ** 3);
+    const admission = new ExecutionResourceAdmission(policy.memoryMaxBytes * 2, 2);
+    const a = new AbortController(), b = new AbortController();
+    const eventsA: unknown[] = [], eventsB: unknown[] = [];
+    const context = (signal: AbortSignal, events: unknown[]): ExecutionResourceContext => ({ runId: randomUUID(),
+      policy, admission, signal, scratchDir: process.env.PAPERCLIP_SCRATCH_DIR!,
+      onUnitPrepared: async () => {}, onOwnershipCommitted: async () => {},
+      onEvidence: async evidence => { events.push(evidence); } });
+    const first = context(a.signal, eventsA), second = context(b.signal, eventsB);
+    first.ownership = new ExecutionResourceOwnership({ ...first });
+    first.onEvidence = evidence => first.ownership!.evidence(evidence);
+    const handles: ReturnType<NonNullable<ReturnType<typeof createResourceProcessLauncher>>>[] = [];
+    try {
+      await withExecutionResourceContext(first, async () => {
+        const launcher = createResourceProcessLauncher({ runId: first.runId! })!;
+        const persistent = launcher({ command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"], cwd: process.cwd(), environment: {} });
+        handles.push(persistent);
+        await persistent.ready;
+        await first.ownership!.handoff(second);
+        a.abort();
+        const control = launcher({ command: process.execPath, args: ["-e", "setTimeout(()=>process.exit(0),100)"], cwd: process.cwd(), environment: {} });
+        handles.push(control);
+        await control.ready;
+        expect((await control.completion).code).toBe(0);
+        await fs.stat(`/proc/${persistent.child.pid}`);
+        b.abort();
+        await persistent.completion;
+      });
+    } finally {
+      b.abort();
+      for (const handle of handles) handle.child.kill("SIGKILL");
+      await Promise.all(handles.map(handle => handle.completion.catch(() => {})));
+    }
+    expect(eventsA).toEqual([]);
+    expect(eventsB).toHaveLength(2);
+    expect(admission.snapshot.active).toBe(0);
+  }, 20_000);
   it("returns a handle before admission and later records the real worker identity", async () => {
     const scratchDir = process.env.PAPERCLIP_SCRATCH_DIR;
     if (!scratchDir) throw new Error("Tests require scratch");

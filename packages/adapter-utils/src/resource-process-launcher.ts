@@ -27,9 +27,11 @@ export function createResourceProcessLauncher(input: {
   return spec => {
     const executionId = `${input.runId}-${randomUUID()}`;
     const controller = new AbortController();
-    const parentAbort = () => controller.abort(resources.signal?.reason);
-    resources.signal?.addEventListener("abort", parentAbort, { once: true });
-    if (resources.signal?.aborted) parentAbort();
+    // Retained factories launch later roots for the authenticated current owner.
+    const parentSignal = resources.ownership ? resources.ownership.signal : resources.signal;
+    const parentAbort = () => controller.abort(parentSignal?.reason);
+    parentSignal?.addEventListener("abort", parentAbort, { once: true });
+    if (parentSignal?.aborted) parentAbort();
     const child: ResourceProcessHandle["child"] = {
       exitCode: null,
       signalCode: null,
@@ -72,7 +74,7 @@ export function createResourceProcessLauncher(input: {
       child.signalCode = result.signal as NodeJS.Signals | null;
       return { code: result.exitCode, signal: child.signalCode, stdout: "", stderr: "" };
     }).catch(error => { child.exitCode = 1; rejectReady(error); throw error; })
-      .finally(() => resources.signal?.removeEventListener("abort", parentAbort));
+      .finally(() => parentSignal?.removeEventListener("abort", parentAbort));
     // A queued cancellation can settle without ever spawning a worker.
     void completion.then(() => { if (child.pid === undefined) rejectReady(new Error("Native execution ended before launch")); }, () => {});
     return { child, completion, ready, processGroupId: null, startedAt };

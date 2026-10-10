@@ -176,7 +176,12 @@ export async function prepareSystemdExecution(input: {
       throw new Error("Execution unit did not report its worker PID");
     },
     signal: async signal => {
-      await execFileAsync("systemctl", ["--user", "kill", "--kill-whom=all", `--signal=${signal}`, unit], { timeout: 5_000 });
+      await execFileAsync("systemctl", ["--user", "kill", "--kill-whom=all", `--signal=${signal}`, unit], { timeout: 5_000 }).catch(async error => {
+        // Concurrent cancellation can collect the unit before this signal.
+        // Suppress only verified absence; permission and live-unit errors matter.
+        const { stdout } = await execFileAsync("systemctl", ["--user", "show", unit, "--property=LoadState", "--value"], { timeout: 5_000 });
+        if (stdout.trim() !== "not-found") throw error;
+      });
     },
     finish: async (cancelled = false) => {
       if (finished) return { ...evidence };

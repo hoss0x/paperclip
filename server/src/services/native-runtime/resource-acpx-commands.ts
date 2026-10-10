@@ -11,7 +11,10 @@ export function createResourceAcpxCommands(runId: string, nativeLoader: () => st
     return {
       close: () => envelope.close(),
       openCommand: installation => envelope.run(async () => {
-        const ticket = await prepareResourceScopeProcess({ runId, cwd: input.cwd, nativeLoaderCommand: nativeLoader(), signal: input.signal });
+        // The envelope follows authenticated warm admission. The original
+        // launch signal belongs to the earlier run and must not cancel a new
+        // control root after ownership transfers.
+        const ticket = await prepareResourceScopeProcess({ runId, cwd: input.cwd, nativeLoaderCommand: nativeLoader() });
         let worker: ReturnType<typeof ticket.spawn> | undefined;
         try {
           const command = await installation.openCommand({ processLauncher: (command, args, options) => {
