@@ -140,6 +140,35 @@ if (!embeddedPostgresSupport.supported) {
 }
 const provisionWorktreeScriptPath = new URL("../../../scripts/provision-worktree.sh", import.meta.url);
 
+const contributorPath = process.env.PATH;
+let fixtureToolRoot: string | null = null;
+beforeAll(async () => {
+  // These fixtures deliberately use a minimal seed config and exercise the
+  // provisioner's no-CLI fallback. A globally installed paperclipai would
+  // otherwise try to initialize a real instance from that fixture config.
+  fixtureToolRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-workspace-tools-"));
+  const fixturePath: string[] = [];
+  for (const [index, directory] of (contributorPath ?? "").split(path.delimiter).entries()) {
+    if (!directory || !existsSync(path.join(directory, "paperclipai"))) {
+      fixturePath.push(directory);
+      continue;
+    }
+    const toolDirectory = path.join(fixtureToolRoot, String(index));
+    await fs.mkdir(toolDirectory);
+    for (const entry of await fs.readdir(directory)) {
+      if (entry === "paperclipai" || entry.startsWith("paperclipai.")) continue;
+      await fs.symlink(path.resolve(directory, entry), path.join(toolDirectory, entry));
+    }
+    fixturePath.push(toolDirectory);
+  }
+  process.env.PATH = fixturePath.join(path.delimiter);
+});
+afterAll(async () => {
+  if (contributorPath === undefined) delete process.env.PATH;
+  else process.env.PATH = contributorPath;
+  if (fixtureToolRoot) await fs.rm(fixtureToolRoot, { recursive: true, force: true });
+});
+
 async function runGit(cwd: string, args: string[]) {
   await execFileAsync("git", args, { cwd });
 }
