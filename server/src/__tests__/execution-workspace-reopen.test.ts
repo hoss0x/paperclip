@@ -215,6 +215,10 @@ describeEmbeddedPostgres("reopen archived isolated execution workspace", () => {
         stdio: "ignore",
       });
     git("init");
+    // Managed Git launchers can remove author environment overrides. Keep
+    // this disposable repository independent of contributor configuration.
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.com");
     writeFileSync(join(dir, "README.md"), "seed\n");
     git("add", "README.md");
     git("commit", "-m", "seed");
