@@ -663,3 +663,13 @@ early, `EPIPE` preserves the command's exit result instead of raising an unhandl
 server error. Unexpected input errors stop the command and reject only after
 cleanup. Real subprocess regressions cover both paths, alongside the existing
 stdin, cancellation, descendant cleanup and resource ownership cases.
+
+### Complete adapter test selection (2026-10-10)
+
+The standard full test runner now selects all configured workspace projects.
+Cursor cloud/local, Gemini, Kimi and Pi were absent from its explicit roster.
+A regression compares the runner's dry-run selection with the Vitest project
+configuration. The Cursor managed-runtime fixture now forwards archive stdin
+and checks transferred bytes. Its real archive operations have a 15-second test
+deadline; the measured bounded run took 10.8 seconds. The five added projects
+pass 213 source tests in 28 suites. Built test copies remain excluded.
