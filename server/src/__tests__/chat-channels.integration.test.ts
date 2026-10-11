@@ -7679,32 +7679,37 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     ).toBe(1);
     expect(deferred).toHaveLength(1);
 
-    deferred.shift()?.();
-    await vi.waitFor(async () => {
-      const rows = await db
+    // Durable admission can need more than the default one-second poll under
+    // bounded CPU. Keep the ordering checks and wait for the drain before teardown.
+    try {
+      deferred.shift()?.();
+      await vi.waitFor(async () => {
+        const rows = await db
+          .select()
+          .from(chatConversations)
+          .where(eq(chatConversations.endpointId, endpoint.id));
+        expect(rows).toHaveLength(1);
+      }, { timeout: 10_000 });
+      const [conversation] = await db
         .select()
         .from(chatConversations)
         .where(eq(chatConversations.endpointId, endpoint.id));
-      expect(rows).toHaveLength(1);
-    });
-    const [conversation] = await db
-      .select()
-      .from(chatConversations)
-      .where(eq(chatConversations.endpointId, endpoint.id));
-    await vi.waitFor(async () => {
-      const rows = await db
-        .select({ body: issueComments.body })
-        .from(issueComments)
-        .where(eq(issueComments.issueId, conversation!.issueId))
-        .orderBy(asc(issueComments.createdAt), asc(issueComments.id));
-      expect(rows.map((row) => row.body)).toEqual([
-        "@maya start the GitHub task",
-        "unmentioned follow-up delivered first",
-      ]);
-      expect(wakeup).toHaveBeenCalledTimes(2);
-    });
-    await service.shutdown();
-  });
+      await vi.waitFor(async () => {
+        const rows = await db
+          .select({ body: issueComments.body })
+          .from(issueComments)
+          .where(eq(issueComments.issueId, conversation!.issueId))
+          .orderBy(asc(issueComments.createdAt), asc(issueComments.id));
+        expect(rows.map((row) => row.body)).toEqual([
+          "@maya start the GitHub task",
+          "unmentioned follow-up delivered first",
+        ]);
+        expect(wakeup).toHaveBeenCalledTimes(2);
+      }, { timeout: 10_000 });
+    } finally {
+      await service.shutdown();
+    }
+  }, 30_000);
 
   it("holds a GitHub follow-up that arrives after the reorder window until its older root mention arrives", async () => {
     const fixture = await seedCompany();
