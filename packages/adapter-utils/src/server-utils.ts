@@ -4785,7 +4785,7 @@ export async function runChildProcess(
             processGroupId: identity ? null : processGroupId, startedAt,
             ...(identity ? { executionUnit: identity.unit } : {}) }).catch(err =>
               onLogError(err, runId, "failed to record child process metadata"));
-          if (resources?.signal?.aborted) await cancelExecution();
+          if (resourceBoundary && resources?.signal?.aborted) await cancelExecution();
         }).catch(err => {
           identityFailure = err;
           onLogError(err, runId, "failed to identify execution unit");
@@ -4801,8 +4801,11 @@ export async function runChildProcess(
           abortKillTimer ??= setTimeout(() => signalRunningProcess(running, "SIGKILL"), Math.max(1, opts.graceSec) * 1000);
         };
         const abort = () => { void cancelExecution().catch(error => onLogError(error, runId, "failed to cancel execution")); };
-        resources?.signal?.addEventListener("abort", abort, { once: true });
-        let activeResourceSignal = resources?.signal;
+        // Without a resource unit, the existing adapter stop controller owns
+        // signal selection and verified terminal ordering. Its abort must not
+        // become a second, premature SIGTERM path.
+        let activeResourceSignal = resourceBoundary ? resources?.signal : undefined;
+        activeResourceSignal?.addEventListener("abort", abort, { once: true });
         const unregisterOwner = resourceBoundary && resources?.ownership?.register({
           unit: resourceBoundary.unit, originRunId: runId, memoryMaxBytes: resources.policy.memoryMaxBytes,
           verify: async () => { const identity = await identityPromise; if (!identity) throw new Error("Execution identity is missing"); await resourceBoundary!.verifyOwnership(identity.pid); },

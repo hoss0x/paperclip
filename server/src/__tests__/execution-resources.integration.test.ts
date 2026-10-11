@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { currentExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
 import { runChildProcess } from "@paperclipai/adapter-utils/server-utils";
 import { createResourceProcessLauncher } from "@paperclipai/adapter-utils/resource-process-launcher";
-import { executeWithResourceGovernance, ExecutionResourceLimitError, RESOURCE_UNIT_PREPARED } from "../services/execution-resources.js";
+import { cancelQueuedResourceExecution, executeWithResourceGovernance, ExecutionResourceLimitError, RESOURCE_UNIT_PREPARED } from "../services/execution-resources.js";
 
 const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTEMD === "1";
 const slice = `paperclip-dispatch-${randomUUID()}.slice`;
@@ -27,6 +28,32 @@ function command(script: string, onSpawn?: Parameters<typeof runChildProcess>[3]
   afterAll(async () => {
     await execFileAsync("systemctl", ["--user", "stop", slice], { timeout: 5_000 });
   });
+
+  it("cancels a queued process reservation without inventing a provider stop owner", async () => {
+    const held: { release?: () => void; queued: () => number } = { queued: () => 0 };
+    await executeWithResourceGovernance(input(), async () => {
+      const resources = currentExecutionResources()!;
+      held.release = await resources.admission.acquire(resources.policy.memoryMaxBytes);
+      held.queued = () => resources.admission.snapshot.queued;
+      return { exitCode: 0, signal: null, timedOut: false };
+    });
+    const controller = new AbortController();
+    const runId = randomUUID(); let spawned = false;
+    const pending = executeWithResourceGovernance({ ...input(controller.signal), runId, controller }, async () => {
+      const result = await command("console.log('must not launch')", async () => { spawned = true; });
+      return { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut };
+    });
+    const cancelled = expect(pending).rejects.toThrow("cancelled while queued");
+    try {
+      await vi.waitFor(() => expect(held.queued()).toBe(1));
+      cancelQueuedResourceExecution(runId, "Operator stopped the queued process");
+      await cancelled; expect(controller.signal.aborted).toBe(true); expect(spawned).toBe(false);
+    } finally { held.release?.(); }
+    expect((await executeWithResourceGovernance(input(), async () => {
+      const result = await command("console.log('later execution')");
+      return { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut };
+    })).exitCode).toBe(0);
+  }, 20_000);
 
   it("persists ownership before launch and projects OOM independently of adapter output", async () => {
     const context = input();

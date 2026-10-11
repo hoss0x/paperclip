@@ -5,12 +5,19 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { heartbeatRunEvents } from "@paperclipai/db";
 import type { AdapterExecutionResult } from "@paperclipai/adapter-utils";
-import { withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import { currentExecutionResources, withOperatorExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
+import { runningProcesses } from "@paperclipai/adapter-utils/server-utils";
 import type { ExecutionResourceEvidence } from "@paperclipai/adapter-utils/systemd-execution";
 
 export const RESOURCE_UNIT_PREPARED = "execution_resource_prepared";
 export const RESOURCE_UNIT_FINISHED = "execution_resource_finished";
 const execFileAsync = promisify(execFile);
+const queuedResourceControllers = new Map<string, AbortController>();
+
+/** A queue reservation is not an opted-in provider stop owner. */
+export function cancelQueuedResourceExecution(runId: string, reason: string): void {
+  if (!runningProcesses.has(runId)) queuedResourceControllers.get(runId)?.abort(new Error(reason));
+}
 
 // Adapter output is data, not controller-owned cancellation authority.
 export function resourceSafeAdapterEventType(eventType: string): string {
@@ -30,6 +37,7 @@ export async function executeWithResourceGovernance(input: {
   scratchDir: string;
   slice?: string;
   signal: AbortSignal;
+  controller?: AbortController;
   record: (event: { eventType: string; message: string; payload: Record<string, unknown> }) => Promise<void>;
 }, execute: () => Promise<AdapterExecutionResult>): Promise<AdapterExecutionResult> {
   const evidence: ExecutionResourceEvidence[] = [];
@@ -48,17 +56,24 @@ export async function executeWithResourceGovernance(input: {
         payload: { ...result } });
     },
   }, async () => {
-    let result: AdapterExecutionResult;
-    try { result = await execute(); }
-    catch (error) {
-      if (evidence.some(item => item.resourceLimitReached)) throw new ExecutionResourceLimitError(evidence);
-      throw error;
+    if (input.runId && input.controller && currentExecutionResources()?.policy.isolation === "systemd") {
+      queuedResourceControllers.set(input.runId, input.controller);
     }
-    const limited = evidence.some(item => item.resourceLimitReached);
-    return { ...result,
-      ...(limited ? { exitCode: result.exitCode || 1, errorCode: "execution_resource_limit", errorMessage: "Execution exceeded its memory resource limit" } : {}),
-      ...(evidence.length ? { resultJson: { ...result.resultJson, executionResources: evidence } } : {}),
-    };
+    try {
+      let result: AdapterExecutionResult;
+      try { result = await execute(); }
+      catch (error) {
+        if (evidence.some(item => item.resourceLimitReached)) throw new ExecutionResourceLimitError(evidence);
+        throw error;
+      }
+      const limited = evidence.some(item => item.resourceLimitReached);
+      return { ...result,
+        ...(limited ? { exitCode: result.exitCode || 1, errorCode: "execution_resource_limit", errorMessage: "Execution exceeded its memory resource limit" } : {}),
+        ...(evidence.length ? { resultJson: { ...result.resultJson, executionResources: evidence } } : {}),
+      };
+    } finally {
+      if (input.runId && queuedResourceControllers.get(input.runId) === input.controller) queuedResourceControllers.delete(input.runId);
+    }
   });
 }
 

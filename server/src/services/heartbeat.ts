@@ -1,4 +1,4 @@
-import { executeWithResourceGovernance, ExecutionResourceLimitError, stopRecordedLegacyExecutionUnits, resourceSafeAdapterEventType } from "./execution-resources.js";
+import { executeWithResourceGovernance, cancelQueuedResourceExecution, ExecutionResourceLimitError, stopRecordedLegacyExecutionUnits, resourceSafeAdapterEventType } from "./execution-resources.js";
 import { retryIdempotentDatabaseOperation } from "../database-retry.js";
 import { prepareConnectionInstructionDelivery } from "./connection-instructions.js";
 import { resolveAssignedConnectionInstructionsForRun } from "./native-runtime/assigned-mcp-tools.js";
@@ -25000,9 +25000,9 @@ export function heartbeatService(
                     runId: run.id,
                     scratchDir: runScratch.dir,
                     signal: executionControl.controller.signal,
+                    controller: executionControl.controller,
                     record: async event => { await appendRunEvent(run, { ...event, stream: "system", level: "info" }); },
                   }, async () => {
-                    await registerAdapterExecutionControl(run.id, executionControl);
                     const current = await getRun(run.id);
                     if (!current || isHeartbeatRunTerminalStatus(current.status)) {
                       executionControl.controller.abort(new Error("Run stopped before provider startup"));
@@ -29599,6 +29599,7 @@ export function heartbeatService(
         ? captureAdapterStopOwnership(run.id)
         : undefined;
     const control = stopOwnership?.control;
+    if (!running && !control) cancelQueuedResourceExecution(run.id, reason);
     // Capture the existing adapter owner before waiting on the run lock. Then
     // atomically fence preparation and refresh the selected runtime, so Stop
     // cannot miss a native handoff that won after its first read.
