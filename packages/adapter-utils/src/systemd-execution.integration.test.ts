@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { resolveExecutionResourcePolicy } from "./execution-resource-policy.js";
 import { prepareSystemdExecution, type SystemdExecutionBoundary } from "./systemd-execution.js";
@@ -41,10 +42,18 @@ function launch(boundary: SystemdExecutionBoundary, stdin = "") {
       scratchDir: process.env.PAPERCLIP_SCRATCH_DIR! });
     try {
       await launch(boundary).completed;
+      const retainedPeak = Number((await promisify(execFile)("systemctl", [
+        "--user", "show", boundary.unit, "--property=MemoryPeak", "--value",
+      ])).stdout.trim());
       const evidence = await boundary.finish();
       expect(evidence.memoryHighBytes).toBe(evidence.memoryMaxBytes);
       expect(evidence.resourceLimitReached).toBe(true);
       expect(evidence.result).toBe("oom-kill");
+      // No live sampler runs here. Completion must recover the retained peak
+      // even after the failed service's cgroup has already disappeared.
+      if (Number.isSafeInteger(retainedPeak) && retainedPeak > 0) {
+        expect(evidence.peakMemoryBytes).toBeGreaterThanOrEqual(retainedPeak);
+      }
     } finally { await boundary.finish(); }
   }, 20_000);
 

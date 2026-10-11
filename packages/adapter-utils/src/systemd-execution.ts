@@ -102,7 +102,7 @@ export async function prepareSystemdExecution(input: {
   let configured = false;
   async function readProperties() {
     const { stdout } = await execFileAsync("systemctl", ["--user", "show", unit,
-      "--property=Id,ActiveState,MemoryMax,ControlGroup,Result,ExecMainCode,ExecMainStatus,ExecMainPID"], { timeout: 5_000 });
+      "--property=Id,ActiveState,MemoryMax,MemoryPeak,ControlGroup,Result,ExecMainCode,ExecMainStatus,ExecMainPID"], { timeout: 5_000 });
     const properties = Object.fromEntries(stdout.trim().split("\n").map(line => {
       const separator = line.indexOf("=");
       return [line.slice(0, separator), line.slice(separator + 1)];
@@ -115,6 +115,13 @@ export async function prepareSystemdExecution(input: {
     evidence.mainExitCode = properties.ExecMainCode ? Number(properties.ExecMainCode) : evidence.mainExitCode;
     evidence.mainExitStatus = properties.ExecMainStatus ? Number(properties.ExecMainStatus) : evidence.mainExitStatus;
     evidence.resourceLimitReached ||= properties.Result === "oom-kill";
+    // systemd retains this counter after an exited service's cgroup disappears.
+    // A fast allocation can exceed the last live sample before that happens.
+    // Older managers may omit the property or return an unavailable sentinel.
+    const retainedPeak = Number(properties.MemoryPeak);
+    if (properties.MemoryPeak && Number.isSafeInteger(retainedPeak) && retainedPeak >= 0) {
+      evidence.peakMemoryBytes = Math.max(evidence.peakMemoryBytes ?? 0, retainedPeak);
+    }
     return properties;
   }
   const sample = async () => {
