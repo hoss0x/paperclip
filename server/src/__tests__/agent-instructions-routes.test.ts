@@ -211,7 +211,7 @@ function makeReflectionCoachAgent(overrides: Record<string, unknown> = {}) {
 }
 
 describe("agent instructions bundle routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doUnmock("../routes/agents.js");
     vi.doUnmock("../routes/authz.js");
@@ -288,6 +288,12 @@ describe("agent instructions bundle routes", () => {
         instructionsFilePath: "/tmp/agent-1/AGENTS.md",
       },
     });
+    // Load the cold route graph inside fixture setup. A timed-out HTTP test
+    // must not finish later and mutate the following case's service mocks.
+    await Promise.all([
+      vi.importActual("../routes/agents.js"),
+      vi.importActual("../middleware/index.js"),
+    ]);
   });
 
   it("returns bundle metadata", async () => {
