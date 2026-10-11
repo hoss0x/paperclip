@@ -1,4 +1,4 @@
-import { AGENT_ADAPTER_TYPES } from "@paperclipai/shared";
+import { AGENT_ADAPTER_TYPES } from "@paperclipai/shared/constants";
 import { isAdapterExecutionPhase } from "@paperclipai/adapter-utils/execution-phase";
 import { MAX_EXECUTION_PHASE_ELAPSED_MS } from "./adapter-execution-phase.js";
 
