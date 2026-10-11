@@ -12,6 +12,7 @@ export interface ExecutionResourcePolicy {
   reserveBytes: number;
   maxConcurrent: number;
   helperMaxConcurrent?: number;
+  runtimeMemoryMaxBytes?: number;
   cpuQuotaPercent: number;
   tasksMax: number;
   buildJobs: number;
@@ -43,24 +44,26 @@ export function resolveExecutionResourcePolicy(
   }
   const reserveBytes = integer(env, "PAPERCLIP_EXECUTION_RESERVE_MIB", Math.ceil(Math.max(GiB, hostMemoryBytes / 4) / MiB)) * MiB;
   const capacityBytes = integer(env, "PAPERCLIP_EXECUTION_CAPACITY_MIB", Math.floor((hostMemoryBytes - reserveBytes) / MiB)) * MiB;
-  // Retained agents need a full helper budget to make progress on small hosts.
+  // Leave room for a retained agent, its helper and a quarter-budget preview.
   // Explicit operator limits remain authoritative.
-  const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes / 2) / MiB)) * MiB;
+  const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes * 4 / 9) / MiB)) * MiB;
+  const runtimeMemoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB", Math.max(1, Math.floor(memoryMaxBytes / (4 * MiB)))) * MiB;
   // A lower memory.high can throttle unreclaimable compiler/provider pages
   // indefinitely before memory.max is reached. Default to the hard boundary;
   // operators can opt into a measured lower soft threshold.
   const memoryHighBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB", memoryMaxBytes / MiB) * MiB;
   const memorySwapMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB", 0, 0) * MiB;
-  if (![reserveBytes, capacityBytes, memoryMaxBytes, memoryHighBytes, memorySwapMaxBytes].every(Number.isSafeInteger)
+  if (![reserveBytes, capacityBytes, memoryMaxBytes, memoryHighBytes, memorySwapMaxBytes, runtimeMemoryMaxBytes].every(Number.isSafeInteger)
     || !Number.isSafeInteger(hostMemoryBytes) || hostMemoryBytes <= 0
     || reserveBytes >= hostMemoryBytes || capacityBytes <= 0
     || capacityBytes + reserveBytes > hostMemoryBytes
-    || memoryMaxBytes > capacityBytes || memoryHighBytes > memoryMaxBytes) {
+    || memoryMaxBytes > capacityBytes || memoryHighBytes > memoryMaxBytes || runtimeMemoryMaxBytes > capacityBytes) {
     throw new Error("Execution memory policy must fit host memory after its reserved capacity");
   }
   return {
     isolation: mode === "none" || (mode === "auto" && platform !== "linux") ? "none" : "systemd",
     reserveBytes, capacityBytes, memoryMaxBytes, memoryHighBytes, memorySwapMaxBytes,
+    runtimeMemoryMaxBytes,
     maxConcurrent: integer(env, "PAPERCLIP_EXECUTION_MAX_CONCURRENT", Math.min(2, Math.max(1, Math.floor(capacityBytes / memoryMaxBytes) - 1))),
     helperMaxConcurrent: integer(env, "PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT", 1),
     cpuQuotaPercent: integer(env, "PAPERCLIP_EXECUTION_CPU_QUOTA_PERCENT", 100),
@@ -84,7 +87,7 @@ export function applyLowMemoryEnvironment(env: NodeJS.ProcessEnv, policy: Execut
 }
 
 interface PendingAdmission {
-  kind: "agent" | "helper";
+  kind: "agent" | "helper" | "runtime";
   bytes: number;
   resolve: (release: () => void) => void;
   reject: (error: Error) => void;
@@ -98,12 +101,15 @@ export class ExecutionResourceAdmission {
   #usedBytes = 0;
   #active = 0;
   #helpers = 0;
+  #runtimes = 0;
+  #helperBytes = 0;
   #pending: PendingAdmission[] = [];
 
-  constructor(readonly capacityBytes: number, readonly maxConcurrent: number, readonly helperMaxConcurrent = 1) {
+  constructor(readonly capacityBytes: number, readonly maxConcurrent: number, readonly helperMaxConcurrent = 1, readonly helperReserveBytes = 0) {
     if (!Number.isSafeInteger(capacityBytes) || capacityBytes < 1
       || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1
-      || !Number.isSafeInteger(helperMaxConcurrent) || helperMaxConcurrent < 1) {
+      || !Number.isSafeInteger(helperMaxConcurrent) || helperMaxConcurrent < 1
+      || !Number.isSafeInteger(helperReserveBytes) || helperReserveBytes < 0 || helperReserveBytes > capacityBytes) {
       throw new Error("Execution admission needs positive integer capacity and concurrency");
     }
   }
@@ -115,25 +121,27 @@ export class ExecutionResourceAdmission {
   /** Count already-running OS units before accepting new work after restart.
    * Existing work can exceed a newly reduced slot count; successors then wait.
    */
-  adopt(bytes: number, kind: "agent" | "helper" = "agent"): () => void {
+  adopt(bytes: number, kind: "agent" | "helper" | "runtime" = "agent"): () => void {
     if (!Number.isSafeInteger(bytes) || bytes < 1 || !Number.isSafeInteger(this.#usedBytes + bytes)) {
       throw new Error("Existing execution unit has an invalid memory budget");
     }
     this.#usedBytes += bytes;
     this.#active++;
-    if (kind === "helper") this.#helpers++;
+    if (kind === "helper") { this.#helpers++; this.#helperBytes += bytes; }
+    if (kind === "runtime") this.#runtimes++;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.#usedBytes -= bytes;
       this.#active--;
-      if (kind === "helper") this.#helpers--;
+      if (kind === "helper") { this.#helpers--; this.#helperBytes -= bytes; }
+      if (kind === "runtime") this.#runtimes--;
       this.#drain();
     };
   }
 
-  acquire(bytes: number, signal?: AbortSignal, kind: "agent" | "helper" = "agent"): Promise<() => void> {
+  acquire(bytes: number, signal?: AbortSignal, kind: "agent" | "helper" | "runtime" = "agent"): Promise<() => void> {
     if (!Number.isSafeInteger(bytes) || bytes < 1 || bytes > this.capacityBytes) {
       return Promise.reject(new Error("Execution budget exceeds admission capacity"));
     }
@@ -162,23 +170,28 @@ export class ExecutionResourceAdmission {
       const index = this.#pending.findIndex(entry => {
         if (seen.has(entry.kind)) return false;
         seen.add(entry.kind);
-        const available = entry.kind === "helper" ? this.#helpers < this.helperMaxConcurrent
-          : this.#active - this.#helpers < this.maxConcurrent;
-        return available && this.#usedBytes + entry.bytes <= this.capacityBytes;
+        const available = entry.kind === "runtime" || (entry.kind === "helper" ? this.#helpers < this.helperMaxConcurrent
+          : this.#active - this.#helpers - this.#runtimes < this.maxConcurrent);
+        // Persistent previews must leave a helper budget for the active agent.
+        const reserved = entry.kind !== "helper" && (entry.kind === "runtime" || this.#runtimes > 0)
+          ? Math.max(0, this.helperReserveBytes - this.#helperBytes) : 0;
+        return available && this.#usedBytes + entry.bytes + reserved <= this.capacityBytes;
       });
       if (index < 0) return;
       const entry = this.#pending.splice(index, 1)[0]!;
       entry.signal?.removeEventListener("abort", entry.abort!);
       this.#usedBytes += entry.bytes;
       this.#active++;
-      if (entry.kind === "helper") this.#helpers++;
+      if (entry.kind === "helper") { this.#helpers++; this.#helperBytes += entry.bytes; }
+      if (entry.kind === "runtime") this.#runtimes++;
       let released = false;
       entry.resolve(() => {
         if (released) return;
         released = true;
         this.#usedBytes -= entry.bytes;
         this.#active--;
-        if (entry.kind === "helper") this.#helpers--;
+        if (entry.kind === "helper") { this.#helpers--; this.#helperBytes -= entry.bytes; }
+        if (entry.kind === "runtime") this.#runtimes--;
         this.#drain();
       });
     }

@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import type { ExecutionResourceAdmission } from "./execution-resource-policy.js";
 
 const execFileAsync = promisify(execFile);
-export interface ExistingExecutionUnit { unit: string; memoryMaxBytes: number; admissionKind?: "agent" | "helper" }
+export interface ExistingExecutionUnit { unit: string; memoryMaxBytes: number; admissionKind?: "agent" | "helper" | "runtime" }
 
 /** User-manager state is authoritative; PID reuse and local process maps are not. */
 export async function listActiveExecutionUnits(slice: string): Promise<ExistingExecutionUnit[]> {
@@ -31,7 +31,8 @@ export async function listActiveExecutionUnits(slice: string): Promise<ExistingE
     const memoryMaxBytes = Number(values.MemoryMax);
     if (!Number.isSafeInteger(memoryMaxBytes) || memoryMaxBytes < 1) throw new Error("Surviving execution unit has no bounded memory budget");
     groups.set(values.Id, { unit: values.Id, memoryMaxBytes,
-      ...(/-helper\.(?:service|scope)$/.test(values.Id) ? { admissionKind: "helper" as const } : {}) });
+      ...(/-helper\.(?:service|scope)$/.test(values.Id) ? { admissionKind: "helper" as const }
+        : /-runtime\.(?:service|scope)$/.test(values.Id) ? { admissionKind: "runtime" as const } : {}) });
   }
   if (envelopes.size) {
     const { stdout: budgets } = await execFileAsync("systemctl", ["--user", "show", ...envelopes,

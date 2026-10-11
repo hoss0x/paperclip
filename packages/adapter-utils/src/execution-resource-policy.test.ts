@@ -162,9 +162,34 @@ it("leaves one helper budget in default agent concurrency when capacity permits"
   expect(policy.capacityBytes - policy.maxConcurrent * policy.memoryMaxBytes).toBeGreaterThanOrEqual(policy.memoryMaxBytes);
   const small = resolveExecutionResourcePolicy({}, "linux", 2 * GiB);
   expect(small.maxConcurrent).toBe(1);
-  expect(small.memoryMaxBytes).toBe(512 * MiB);
+  expect(small.memoryMaxBytes).toBe(455 * MiB);
   for (const hostGiB of [2, 3, 4]) {
     const defaults = resolveExecutionResourcePolicy({}, "linux", hostGiB * GiB);
     expect(defaults.capacityBytes - defaults.maxConcurrent * defaults.memoryMaxBytes).toBeGreaterThanOrEqual(defaults.memoryMaxBytes);
+    expect(2 * defaults.memoryMaxBytes + defaults.runtimeMemoryMaxBytes!).toBeLessThanOrEqual(defaults.capacityBytes);
   }
+});
+
+it("keeps persistent previews out of agent/helper slots and reserves helper headroom", async () => {
+  const pool = new ExecutionResourceAdmission(225, 1, 1, 100);
+  const preview = await pool.acquire(25, undefined, "runtime");
+  const agent = await pool.acquire(100);
+  const helper = await pool.acquire(100, undefined, "helper");
+  expect(pool.snapshot).toEqual({ active: 3, usedBytes: 225, queued: 0 });
+  helper(); agent(); preview();
+  const survivor = pool.adopt(25, "runtime");
+  const next = await pool.acquire(100);
+  const controller = new AbortController();
+  const queued = pool.acquire(25, controller.signal, "runtime");
+  const failure = expect(queued).rejects.toThrow("cancelled while queued");
+  expect(pool.snapshot.queued).toBe(1);
+  controller.abort(); await failure;
+  const dependent = await pool.acquire(100, undefined, "helper");
+  dependent(); next(); survivor();
+  expect(pool.snapshot).toEqual({ active: 0, usedBytes: 0, queued: 0 });
+});
+
+it("accepts a bounded preview budget and rejects an aggregate overflow", () => {
+  expect(resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB: "256" }, "linux", 4 * GiB).runtimeMemoryMaxBytes).toBe(256 * MiB);
+  expect(() => resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB: "4000" }, "linux", 4 * GiB)).toThrow();
 });

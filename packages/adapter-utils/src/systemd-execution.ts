@@ -58,7 +58,7 @@ export interface SystemdExecutionBoundary {
 /** Fail closed: a requested Linux boundary is never retried as an ordinary spawn. */
 export async function prepareSystemdExecution(input: {
   runId: string;
-  admissionKind?: "agent" | "helper";
+  admissionKind?: "agent" | "helper" | "runtime";
   command: string;
   args: string[];
   cwd: string;
@@ -90,7 +90,7 @@ export async function prepareSystemdExecution(input: {
     await fs.rm(directory, { recursive: true, force: true });
     throw error;
   }
-  const unit = `paperclip-execution-${input.runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-${randomUUID()}${input.admissionKind === "helper" ? "-helper" : ""}.${input.scope ? "scope" : "service"}`;
+  const unit = `paperclip-execution-${input.runId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-${randomUUID()}${input.admissionKind === "helper" ? "-helper" : input.admissionKind === "runtime" ? "-runtime" : ""}.${input.scope ? "scope" : "service"}`;
   const policy = input.policy;
   const evidence: ExecutionResourceEvidence = {
     unit, memoryMaxBytes: policy.memoryMaxBytes, memoryHighBytes: policy.memoryHighBytes,

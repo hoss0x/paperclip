@@ -121,11 +121,12 @@ measurement. They are not a minimum-VPS recommendation.
 | `PAPERCLIP_EXECUTION_ISOLATION` | `auto`: systemd on Linux, `none` elsewhere |
 | `PAPERCLIP_EXECUTION_RESERVE_MIB` | Greater of 1024 MiB and 25% of host RAM |
 | `PAPERCLIP_EXECUTION_CAPACITY_MIB` | Host RAM minus reserve |
-| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and half the capacity |
+| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and 4/9 of capacity, rounded down to MiB |
 | `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | Equal to the hard limit; lower thresholds are opt-in |
 | `PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB` | 0 |
 | `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Up to 2; leave one helper budget when possible, with at least one agent slot |
 | `PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT` | 1 controller helper slot |
+| `PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB` | One quarter of the agent budget, rounded down to at least 1 MiB |
 | `PAPERCLIP_EXECUTION_CPU_QUOTA_PERCENT` | 100 (one CPU equivalent) |
 | `PAPERCLIP_EXECUTION_TASKS_MAX` | 128 |
 | `PAPERCLIP_EXECUTION_BUILD_JOBS` | 1 |
@@ -673,3 +674,62 @@ configuration. The Cursor managed-runtime fixture now forwards archive stdin
 and checks transferred bytes. Its real archive operations have a 15-second test
 deadline; the measured bounded run took 10.8 seconds. The five added projects
 pass 213 source tests in 28 suites. Built test copies remain excluded.
+
+
+### Persistent workspace services and preparation (2026-10-11)
+
+Final launch review found two more controller-side paths: workspace preparation
+commands and persistent local preview services. Both now use the shared Linux
+boundary. This closes a gap where a project build or preview could inherit the
+control-plane cgroup.
+
+Preparation keeps its streamed output, byte counts and truncation behavior. Its
+scope shares the bounded helper lane. Admission counts toward a 30-minute
+preparation deadline. A memory failure reports `execution_resource_limit`;
+cleanup completes before the command returns. Explicitly disabled or unsupported
+isolation keeps the previous direct command behavior.
+
+A preview has its own systemd service and configurable memory budget. It remains
+bounded after the starting turn ends. Its append-only log descriptors, command,
+environment and actual workload PID retain their existing contracts. The private
+local-service registry records the runtime service UUID, unit and memory budget
+before launch. Reuse verifies PID/cgroup/unit identity. Startup reconciliation
+counts surviving preview bytes without consuming an agent or helper slot. A
+replacement listener on the previous port cannot become the owned service.
+Leader loss and Stop clean the complete unit, including detached descendants.
+Failed cleanup keeps the private owner and reservation for retry. OOM diagnostics
+identify the service UUID and retain the available terminal memory counter.
+
+Runtime admission also reserves one helper budget. Otherwise a persistent
+preview could occupy the bytes needed to serve the agent that uses it. Small-host
+agent defaults use at most 4/9 of total execution capacity. Two such budgets plus
+a quarter-budget preview fit that capacity. Explicit agent budgets remain
+authoritative; a preview or later agent queues when its configured combination
+cannot retain helper headroom. Multiple previews also share the same aggregate
+cap. These are resource-policy defaults, not a VPS minimum claim.
+
+Real tests cover public workspace-service startup and cross-turn reuse, exact
+environment and worker membership, detached cleanup, a 128 MiB preview OOM,
+terminal peak evidence, later recovery, preparation OOM/recovery and adoption by
+an independent controller. That controller preserves the same PID and admits an
+agent plus its helper with one agent slot. Each fixture releases its previews
+before the next case; a prior retained preview must not distort that capacity
+measurement. Published-package qualification selects compiled modules for both
+the test controller and its independent successor.
+
+### Legacy stop compatibility (2026-10-11)
+
+A queue reservation does not make an adapter an opted-in provider stop owner.
+Registering every adapter early changed the existing process stop ordering and
+Codex signal choice, including when isolation was disabled. The wrapper now
+leaves provider registration to the existing cancellation-readiness hook. A
+separate private controller map cancels bounded queue reservations before launch.
+Direct processes retain their existing stop controller. Resource abort listeners
+apply only when a real resource unit exists.
+
+The original stop assertions remain intact. Focused regressions cover verified
+termination before terminal status, Ctrl-C for the legacy Codex process, failed
+termination/write retry, queue cancellation and subsequent execution. A test that
+holds a chat row lock now has a finite independent lock lease. It asserts the
+lease did not expire before checking admission; a test timeout cannot leave that
+intentional lock blocking later fixture cleanup.
