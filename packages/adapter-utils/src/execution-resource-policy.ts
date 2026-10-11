@@ -42,12 +42,12 @@ export function resolveExecutionResourcePolicy(
   if (mode === "systemd" && platform !== "linux") {
     throw new Error("systemd execution isolation requires Linux");
   }
-  const reserveBytes = integer(env, "PAPERCLIP_EXECUTION_RESERVE_MIB", Math.ceil(Math.max(GiB, hostMemoryBytes / 4) / MiB)) * MiB;
+  const reserveBytes = integer(env, "PAPERCLIP_EXECUTION_RESERVE_MIB", Math.ceil(Math.max(1.5 * GiB, hostMemoryBytes / 4) / MiB)) * MiB;
   const capacityBytes = integer(env, "PAPERCLIP_EXECUTION_CAPACITY_MIB", Math.floor((hostMemoryBytes - reserveBytes) / MiB)) * MiB;
-  // Leave room for a retained agent, its helper and a quarter-budget preview.
+  // Leave room for a retained agent, its helper and a preview.
   // Explicit operator limits remain authoritative.
-  const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes * 4 / 9) / MiB)) * MiB;
-  const runtimeMemoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB", Math.max(1, Math.floor(memoryMaxBytes / (4 * MiB)))) * MiB;
+  const memoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_MEMORY_MAX_MIB", Math.floor(Math.min(2 * GiB, capacityBytes / 3) / MiB)) * MiB;
+  const runtimeMemoryMaxBytes = integer(env, "PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB", memoryMaxBytes / MiB) * MiB;
   // A lower memory.high can throttle unreclaimable compiler/provider pages
   // indefinitely before memory.max is reached. Default to the hard boundary;
   // operators can opt into a measured lower soft threshold.

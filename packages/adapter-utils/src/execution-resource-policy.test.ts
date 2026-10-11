@@ -158,11 +158,11 @@ describe("controller helper admission", () => {
 
 it("leaves one helper budget in default agent concurrency when capacity permits", () => {
   const policy = resolveExecutionResourcePolicy({}, "linux", 7933 * MiB);
-  expect(policy.maxConcurrent).toBe(1);
+  expect(policy.maxConcurrent).toBe(2);
   expect(policy.capacityBytes - policy.maxConcurrent * policy.memoryMaxBytes).toBeGreaterThanOrEqual(policy.memoryMaxBytes);
   const small = resolveExecutionResourcePolicy({}, "linux", 2 * GiB);
-  expect(small.maxConcurrent).toBe(1);
-  expect(small.memoryMaxBytes).toBe(455 * MiB);
+  expect(small.maxConcurrent).toBe(2);
+  expect(small.memoryMaxBytes).toBe(170 * MiB);
   for (const hostGiB of [2, 3, 4]) {
     const defaults = resolveExecutionResourcePolicy({}, "linux", hostGiB * GiB);
     expect(defaults.capacityBytes - defaults.maxConcurrent * defaults.memoryMaxBytes).toBeGreaterThanOrEqual(defaults.memoryMaxBytes);

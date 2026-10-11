@@ -119,14 +119,14 @@ measurement. They are not a minimum-VPS recommendation.
 | Environment variable | Initial default |
 | --- | --- |
 | `PAPERCLIP_EXECUTION_ISOLATION` | `auto`: systemd on Linux, `none` elsewhere |
-| `PAPERCLIP_EXECUTION_RESERVE_MIB` | Greater of 1024 MiB and 25% of host RAM |
+| `PAPERCLIP_EXECUTION_RESERVE_MIB` | Greater of 1536 MiB and 25% of host RAM |
 | `PAPERCLIP_EXECUTION_CAPACITY_MIB` | Host RAM minus reserve |
-| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and 4/9 of capacity, rounded down to MiB |
+| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and one third of capacity, rounded down to MiB |
 | `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | Equal to the hard limit; lower thresholds are opt-in |
 | `PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB` | 0 |
 | `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Up to 2; leave one helper budget when possible, with at least one agent slot |
 | `PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT` | 1 controller helper slot |
-| `PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB` | One quarter of the agent budget, rounded down to at least 1 MiB |
+| `PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB` | Equal to the agent hard budget |
 | `PAPERCLIP_EXECUTION_CPU_QUOTA_PERCENT` | 100 (one CPU equivalent) |
 | `PAPERCLIP_EXECUTION_TASKS_MAX` | 128 |
 | `PAPERCLIP_EXECUTION_BUILD_JOBS` | 1 |
@@ -702,8 +702,8 @@ identify the service UUID and retain the available terminal memory counter.
 
 Runtime admission also reserves one helper budget. Otherwise a persistent
 preview could occupy the bytes needed to serve the agent that uses it. Small-host
-agent defaults use at most 4/9 of total execution capacity. Two such budgets plus
-a quarter-budget preview fit that capacity. Explicit agent budgets remain
+agent defaults use at most one third of total execution capacity. An agent, its
+helper and an equally sized preview fit that capacity. Explicit agent budgets remain
 authoritative; a preview or later agent queues when its configured combination
 cannot retain helper headroom. Multiple previews also share the same aggregate
 cap. These are resource-policy defaults, not a VPS minimum claim.
@@ -733,3 +733,11 @@ termination/write retry, queue cancellation and subsequent execution. A test tha
 holds a chat row lock now has a finite independent lock lease. It asserts the
 lease did not expire before checking admission; a test timeout cannot leave that
 intentional lock blocking later fixture cleanup.
+
+
+The default host reserve includes a 1 GiB control-plane/database envelope and
+512 MiB for the OS and administration, or 25% of host RAM when that is larger.
+The original 512 MiB preview default was below the already-measured 869.8 MiB
+packaged server/database peak. Preview defaults therefore use the full agent
+budget. This reserve and the small-host three-budget split still need final guest
+qualification; neither establishes 1 GiB support or a full-development minimum.
