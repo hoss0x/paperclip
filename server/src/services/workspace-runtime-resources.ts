@@ -24,7 +24,7 @@ function validateOwner(owner: WorkspaceRuntimeResourceOwner) {
 /** Independent previews outlive a turn. They consume aggregate bytes, rather
  * than an agent or helper slot, and retain private server ownership on disk. */
 export async function spawnWorkspaceRuntimeService(input: {
-  ownerId: string; command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; logFd: number;
+  ownerId: string; command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; logFd: number; logPath: string;
   persistOwnership: (owner: WorkspaceRuntimeResourceOwner) => Promise<void>;
 }): Promise<{ child: ChildProcess; owner: WorkspaceRuntimeResourceOwner } | null> {
   if (resolveExecutionResourcePolicy().isolation === "none") return null;
@@ -62,8 +62,14 @@ export async function spawnWorkspaceRuntimeService(input: {
         const finish = (): Promise<void> => finalizing ??= (async () => {
           const evidence = await owned.finish();
           await fs.rm(scratchDir, { recursive: true, force: true });
-          if (evidence.resourceLimitReached) logger.warn({ runtimeServiceId: input.ownerId,
-            executionResources: evidence }, "Workspace runtime exceeded its memory resource limit");
+          if (evidence.resourceLimitReached) {
+            // Retain the same diagnosis in the service's durable output after
+            // systemd collects its terminal counters. Startup errors already
+            // expose this bounded log excerpt through the existing contract.
+            await fs.appendFile(input.logPath, `[paperclip] execution_resource_limit: Workspace runtime exceeded its memory resource limit ${JSON.stringify(evidence)}\n`);
+            logger.warn({ runtimeServiceId: input.ownerId,
+              executionResources: evidence }, "Workspace runtime exceeded its memory resource limit");
+          }
           release!();
           live.delete(owner.unit);
         })().catch(error => { finalizing = undefined; throw error; });

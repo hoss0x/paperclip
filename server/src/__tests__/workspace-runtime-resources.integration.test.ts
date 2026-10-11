@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { ensureRuntimeServicesForRun, releaseRuntimeServicesForRun, resetRuntimeServicesForTests } from "../services/workspace-runtime.js";
-import { readLocalServiceRegistryRecord, listLocalServiceRegistryRecords } from "../services/local-service-supervisor.js";
+import { readLocalServiceRegistryRecord, listLocalServiceRegistryRecords, resolveLocalServiceLogPath } from "../services/local-service-supervisor.js";
 import { verifyWorkspaceRuntimeExecution, stopWorkspaceRuntimeExecution } from "../services/workspace-runtime-resources.js";
 import { executeWorkspaceRuntimeCommand } from "../services/workspace-runtime-command.js";
 import { logger } from "../middleware/logger.js";
@@ -96,6 +96,9 @@ describe.skipIf(!enabled)("workspace runtime physical resource ownership", () =>
     expect(memory.executionResources.resourceLimitReached).toBe(true);
     expect(memory.executionResources.peakMemoryBytes).toBeGreaterThanOrEqual(128 * 1024 ** 2);
     warning.mockRestore();
+    const durable = await fs.readFile(resolveLocalServiceLogPath(record!.serviceKey), "utf8");
+    expect(durable).toContain("execution_resource_limit");
+    expect(durable).toContain('"peakMemoryBytes":134217728');
     const later = await start("recovery"); expect((await fetch(later.service.url!)).ok).toBe(true);
     // A registry descriptor for another owner cannot cancel a healthy successor.
     const [next] = (await listLocalServiceRegistryRecords()).filter(record => record.runtimeServiceId === later.service.id);

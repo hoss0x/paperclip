@@ -6417,7 +6417,7 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
   let child: ChildProcess;
   try {
     const managed = await spawnWorkspaceRuntimeService({ ownerId: record.id,
-      command: shell, args: ["-lc", command], cwd: serviceCwd, env, logFd: serviceLog.handle.fd,
+      command: shell, args: ["-lc", command], cwd: serviceCwd, env, logFd: serviceLog.handle.fd, logPath: serviceLog.logPath,
       persistOwnership: async owner => { record.resourceOwner = owner; await persistLocalRegistry(0); },
     });
     child = managed?.child ?? spawn(shell, ["-lc", command], {
