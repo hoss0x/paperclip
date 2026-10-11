@@ -25,12 +25,7 @@ describe("codex inactivity monitor (integration: real subprocess)", () => {
         current: ReturnType<typeof createCodexProcessActivityMonitor> | null;
       } = { current: null };
       let monitorFired = false;
-      const monitor = createCodexOutputInactivityMonitor({
-        timeoutMs,
-        onFire: () => {
-          monitorFired = true;
-        },
-      });
+      const inactivity: { current: ReturnType<typeof createCodexOutputInactivityMonitor> | null } = { current: null };
 
       try {
         const proc = await runChildProcess(
@@ -43,24 +38,25 @@ describe("codex inactivity monitor (integration: real subprocess)", () => {
             timeoutSec: 5,
             graceSec: 1,
             onSpawn: async (meta) => {
+              inactivity.current = createCodexOutputInactivityMonitor({ timeoutMs, onFire: () => { monitorFired = true; } });
               processActivityMonitor.current = createCodexProcessActivityMonitor({
                 pid: meta.pid,
                 processGroupId: meta.processGroupId,
                 intervalMs: 50,
-                onActivity: () => monitor.noteProcessActivity(),
+                onActivity: () => inactivity.current?.noteProcessActivity(),
               });
             },
-            onLog: async (stream, chunk) => monitor.noteOutputChunk(stream, chunk),
+            onLog: async (stream, chunk) => inactivity.current?.noteOutputChunk(stream, chunk),
           },
         );
 
         expect(proc.exitCode).toBe(0);
         expect(proc.timedOut).toBe(false);
         expect(monitorFired).toBe(false);
-        expect(monitor.state().processActivityCount).toBeGreaterThan(0);
+        expect(inactivity.current!.state().processActivityCount).toBeGreaterThan(0);
       } finally {
         processActivityMonitor.current?.stop();
-        monitor.stop();
+        inactivity.current?.stop();
       }
     },
     10_000,

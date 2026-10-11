@@ -1259,7 +1259,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const processActivityMonitor: { current: CodexProcessActivityMonitorHandle | null } = { current: null };
       const resolvedMonitorTimeoutMs = monitorResolution.mode === "disabled" ? null : monitorResolution.timeoutMs;
 
-      const monitor =
+      const startMonitor = () =>
         monitorResolution.mode === "disabled"
           ? null
           : createCodexOutputInactivityMonitor({
@@ -1300,8 +1300,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               },
             });
 
+      let monitor: ReturnType<typeof createCodexOutputInactivityMonitor> | null = null;
       const wrappedOnSpawn = async (meta: { pid: number; processGroupId: number | null; startedAt: string }) => {
         killTarget = { pid: meta.pid ?? null, processGroupId: meta.processGroupId };
+        // Admission and workspace staging can wait without a running provider.
+        // Start inactivity accounting only when its worker identity is ready.
+        monitor ??= startMonitor();
         if (monitor && resolvedMonitorTimeoutMs !== null && !executionTargetIsRemote) {
           processActivityMonitor.current = createCodexProcessActivityMonitor({
             pid: meta.pid,
@@ -1310,7 +1314,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               CODEX_PROCESS_ACTIVITY_POLL_INTERVAL_MS,
               Math.max(1_000, Math.floor(resolvedMonitorTimeoutMs / 4)),
             ),
-            onActivity: () => monitor.noteProcessActivity(),
+            onActivity: () => monitor?.noteProcessActivity(),
           });
         }
         if (onSpawn) {

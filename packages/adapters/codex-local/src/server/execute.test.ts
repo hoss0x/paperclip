@@ -117,7 +117,7 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
     );
   }
 
-  async function runTeardown(input: { sandboxAuth: string; hostAuth: string; onProviderStopped?: () => Promise<void> }) {
+  async function runTeardown(input: { sandboxAuth: string; hostAuth: string; outputInactivityTimeoutMs?: number; onProviderStopped?: () => Promise<void> }) {
     const rootDir = await mkdtemp(
       path.join(os.tmpdir(), "paperclip-codex-copyback-e2e-"),
     );
@@ -150,6 +150,7 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
       config: {
         command: "codex",
         engine: "cli",
+        outputInactivityTimeoutMs: input.outputInactivityTimeoutMs,
         // External CODEX_HOME (outside the managed company tree) so no managed
         // seeding rewrites auth.json before teardown; equals the shared host home.
         env: { CODEX_HOME: sharedHostHome },
@@ -181,6 +182,18 @@ describe("codex execute — outbound auth copy-back restore contribution", () =>
       executionResult,
     };
   }
+
+  it("does not classify admission or staging wait as provider inactivity", async () => {
+    runChildProcess.mockImplementationOnce(async (...args: unknown[]) => {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const options = args.at(-1) as { onSpawn: (meta: { pid: number; processGroupId: null; startedAt: string }) => Promise<void> };
+      await options.onSpawn({ pid: 321, processGroupId: null, startedAt: new Date().toISOString() });
+      return { exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "", pid: 321, startedAt: new Date().toISOString() };
+    });
+    const result = await runTeardown({ sandboxAuth: "{}", hostAuth: "{}", outputInactivityTimeoutMs: 25 });
+    expect(result.executionResult.exitCode).toBe(0);
+    expect(result.executionResult.errorCode).not.toBe("codex_output_inactivity_monitor");
+  });
 
   it("collects stopped-provider instruction edits before a throwing remote restore", async () => {
     const order: string[] = [];
