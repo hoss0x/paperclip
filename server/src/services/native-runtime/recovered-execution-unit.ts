@@ -60,7 +60,7 @@ export async function recoverExecutionUnit(
   let unregister: (() => void) | undefined;
   let activeSignal: AbortSignal | undefined;
   let closing: Promise<void> | undefined;
-  async function sample(properties = false) {
+  const sample = async (properties = false) => {
     try {
       const [peak, events] = await Promise.all([
         readFile(`/sys/fs/cgroup${cgroup}/memory.peak`, "utf8"),
@@ -83,7 +83,7 @@ export async function recoverExecutionUnit(
     if (values.MemoryPeak && Number.isSafeInteger(peak)) evidence.peakMemoryBytes = Math.max(evidence.peakMemoryBytes ?? 0, peak);
     evidence.result = values.Result || evidence.result;
     evidence.resourceLimitReached ||= values.Result === "oom-kill";
-  }
+  };
   const recovered = {
     signal: async (signal: NodeJS.Signals) => {
       if (!await dependencies.isAlive()) return false;

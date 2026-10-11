@@ -45,7 +45,7 @@ const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTE
         },
       }, execute);
     };
-    let recovered: Awaited<ReturnType<typeof recoverRecordedExecutionUnit>> = null;
+    const state: { recovered: Awaited<ReturnType<typeof recoverRecordedExecutionUnit>> } = { recovered: null };
     let owner: ExecutionResourceOwnership | undefined;
     const alive = async (pid: number) => {
       try { return !(await readFile(`/proc/${pid}/stat`, "utf8")).split(") ")[1]?.startsWith("Z"); }
@@ -65,19 +65,19 @@ const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTE
         await db.insert(heartbeatRunEvents).values({ companyId, agentId, runId: runA, seq: 1,
           eventType: "execution_resource_prepared", stream: "system", payload: { unit, memoryMaxBytes: 96 * 1024 * 1024 } });
         owner = currentExecutionResources()!.ownership;
-        recovered = await recoverRecordedExecutionUnit(db, { companyId, runId: runA, pid: ids.pid, isAlive: () => alive(ids.pid) });
-        expect(recovered).not.toBeNull();
+        state.recovered = await recoverRecordedExecutionUnit(db, { companyId, runId: runA, pid: ids.pid, isAlive: () => alive(ids.pid) });
+        expect(state.recovered).not.toBeNull();
         // Only the authenticated transport may activate the restored lease.
-        await (recovered as typeof recovered & { onAuthenticated?: () => Promise<void> })?.onAuthenticated?.();
+        await state.recovered?.onAuthenticated();
         return success();
       });
       const result = await run(runB, b.signal, async () => {
         await owner!.handoff(currentExecutionResources()!);
         a.abort();
         expect(await alive(ids.pid)).toBe(true);
-        await recovered!.signal("SIGUSR1");
+        await state.recovered!.signal("SIGUSR1");
         await expect.poll(async () => (await ctl(["show", unit, "--property=Result", "--value"])).trim(), { timeout: 5000 }).toBe("oom-kill");
-        await recovered!.cleanup();
+        await state.recovered!.cleanup();
         return success();
       });
       expect(result.errorCode).toBe("execution_resource_limit");
@@ -99,7 +99,7 @@ const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTE
       expect(later.errorCode).toBeUndefined();
       await writeFile(`${process.env.PAPERCLIP_SCRATCH_DIR}/recovered-ownership-evidence.json`, JSON.stringify({ runA, runB, runC, ids, result, later, events }, null, 2));
     } finally {
-      await recovered?.cleanup().catch(() => {});
+      await state.recovered?.cleanup().catch(() => {});
       await ctl(["stop", unit]).catch(() => {});
       await ctl(["reset-failed", unit]).catch(() => {});
       await ctl(["stop", slice]).catch(() => {});
