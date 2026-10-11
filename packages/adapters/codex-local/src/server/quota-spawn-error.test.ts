@@ -19,7 +19,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import { fetchCodexQuota, getQuotaWindows } from "./quota.js";
 
-function createChildThatErrorsOnMicrotask(err: Error): ChildProcess {
+function createChild(): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
   const stream = Object.assign(new EventEmitter(), {
     setEncoding: () => {},
@@ -27,12 +27,15 @@ function createChildThatErrorsOnMicrotask(err: Error): ChildProcess {
   Object.assign(child, {
     stdout: stream,
     stderr: Object.assign(new EventEmitter(), { setEncoding: () => {} }),
-    stdin: { write: vi.fn(), end: vi.fn() },
+    stdin: Object.assign(new EventEmitter(), { write: vi.fn(), end: vi.fn() }),
     kill: vi.fn(),
   });
-  queueMicrotask(() => {
-    child.emit("error", err);
-  });
+  return child;
+}
+
+function createChildThatErrorsOnMicrotask(err: Error): ChildProcess {
+  const child = createChild();
+  queueMicrotask(() => child.emit("error", err));
   return child;
 }
 
@@ -65,6 +68,30 @@ describe("CodexRpcClient spawn failures", () => {
     } else {
       process.env.CODEX_HOME = previousCodexHome;
     }
+  });
+
+  it("rejects the first RPC after an immediate app-server exit", async () => {
+    const child = createChild();
+    mockSpawn.mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", 1, null));
+      return child;
+    });
+    const result = await getQuotaWindows();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("codex app-server closed unexpectedly");
+    expect(child.stdin!.write).not.toHaveBeenCalled();
+  });
+
+  it("handles an early input-pipe failure without enqueuing an RPC", async () => {
+    const child = createChild();
+    mockSpawn.mockImplementation(() => {
+      queueMicrotask(() => child.stdin!.emit("error", new Error("quota fixture pipe closed")));
+      return child;
+    });
+    const result = await getQuotaWindows();
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("quota fixture pipe closed");
+    expect(child.stdin!.write).not.toHaveBeenCalled();
   });
 
   it("classifies app-server refresh-token failures as quota probe auth errors", async () => {

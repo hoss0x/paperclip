@@ -488,6 +488,7 @@ class CodexRpcClient {
   private buffer = "";
   private pending = new Map<number, PendingRequest>();
   private stderr = "";
+  private terminalError: Error | undefined;
 
   private constructor(private readonly proc: ChildProcessWithoutNullStreams, private readonly owned?: ResourceStdioProcess) {
     this.proc.stdout.setEncoding("utf8");
@@ -497,19 +498,21 @@ class CodexRpcClient {
       this.stderr = (this.stderr + chunk).slice(-MAX_QUOTA_ERROR_BODY_BYTES);
     });
     this.proc.on("exit", () => {
-      for (const request of this.pending.values()) {
-        clearTimeout(request.timer);
-        request.reject(new Error(this.stderr.trim() || "codex app-server closed unexpectedly"));
-      }
-      this.pending.clear();
+      this.fail(new Error(this.stderr.trim() || "codex app-server closed unexpectedly"));
     });
-    this.proc.on("error", (err: Error) => {
-      for (const request of this.pending.values()) {
-        clearTimeout(request.timer);
-        request.reject(err);
-      }
-      this.pending.clear();
-    });
+    this.proc.on("error", (error: Error) => this.fail(error));
+    this.proc.stdin.on("error", (error: Error) => this.fail(error));
+  }
+
+  private fail(error: Error) {
+    // open() is asynchronous even on the direct-spawn path. An immediate
+    // spawn/pipe failure can precede initialize() and its first pending RPC.
+    this.terminalError ??= error;
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(this.terminalError);
+    }
+    this.pending.clear();
   }
 
   private onStdout(chunk: string) {
@@ -543,6 +546,7 @@ class CodexRpcClient {
   }
 
   private request(method: string, params: Record<string, unknown> = {}, timeoutMs = 6_000): Promise<Record<string, unknown>> {
+    if (this.terminalError) return Promise.reject(this.terminalError);
     const id = this.nextId++;
     const payload = JSON.stringify({ id, method, params }) + "\n";
     return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -556,6 +560,7 @@ class CodexRpcClient {
   }
 
   private notify(method: string, params: Record<string, unknown> = {}) {
+    if (this.terminalError) throw this.terminalError;
     this.proc.stdin.write(JSON.stringify({ method, params }) + "\n");
   }
 
