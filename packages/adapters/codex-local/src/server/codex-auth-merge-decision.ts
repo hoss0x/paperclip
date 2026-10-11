@@ -1,8 +1,5 @@
-import { execFile as execFileCallback } from "node:child_process";
+import { execFileWithResources } from "@paperclipai/adapter-utils/resource-buffered-command";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-
-const execFile = promisify(execFileCallback);
 
 // The single identity-and-freshness predicate. Every credential writer that must
 // answer "should the caller replace `destination` with `source`?" runs this one
@@ -56,9 +53,10 @@ export async function decideCodexAuthMerge(
     ? [DECISION_SCRIPT_PATH, SEED_IF_DEST_ABSENT_FLAG, sourcePath, destinationPath]
     : [DECISION_SCRIPT_PATH, sourcePath, destinationPath];
   try {
-    await execFile("node", args);
+    await execFileWithResources("node", args, { admissionKind: "helper" });
   } catch (error) {
     const code = (error as { code?: unknown }).code;
+    if (code === "execution_resource_limit") throw error;
     if (typeof code === "number" && KNOWN_EXIT_CODES.has(code)) {
       return code;
     }

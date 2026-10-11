@@ -6,6 +6,7 @@ import { currentExecutionResources, withExecutionResourceContext } from "./execu
 import { launchResourceStdioProcess } from "./resource-stdio-process.js";
 
 export interface BufferedCommandOptions {
+  admissionKind?: "agent" | "helper";
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeout?: number;
@@ -60,10 +61,14 @@ export async function execFileWithResources(command: string, args: string[], opt
       if (executable) break;
     }
     if (!executable) throw Object.assign(new Error("Execution command is unavailable"), { code: denied ? "EACCES" : "ENOENT", stdout, stderr });
-    const worker = await withExecutionResourceContext({ ...resources, onEvidence: async evidence => {
-      limited ||= evidence.resourceLimitReached;
-      await resources.onEvidence?.(evidence);
-    } }, () => launchResourceStdioProcess({ runId: resources.runId ?? randomUUID(), command, args,
+    const worker = await withExecutionResourceContext({
+      ...resources,
+      admissionKind: options.admissionKind ?? resources.admissionKind,
+      onEvidence: async evidence => {
+        limited ||= evidence.resourceLimitReached;
+        await resources.onEvidence?.(evidence);
+      },
+    }, () => launchResourceStdioProcess({ runId: resources.runId ?? randomUUID(), command, args,
       cwd, env, signal,
       scope: true, nativeLoaderCommand: resources.nativeLoaderCommand?.(), detached: true, allowEarlyExit: true }));
     let escalation: NodeJS.Timeout | undefined;
