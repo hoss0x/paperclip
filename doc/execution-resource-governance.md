@@ -791,3 +791,87 @@ The Rust native-provider fixture also copies its sidecar into its private test
 directory. Cargo's output can be group-writable under a contributor's umask.
 The private copy meets the unchanged launch verifier's requirements. All 19
 native-provider cases pass without changing the shared Cargo artifact.
+
+
+## Final review closeout — 2026-10-12
+
+READY FOR HOSSAM REVIEW on the current approximately 8 GiB VPS. The task owner
+deferred exact 2 GiB and 4 GiB minimum-host sizing. No smaller-host qualification
+or minimum recommendation is claimed. No merge, deployment or live restart occurred.
+This section supersedes the incomplete gates in earlier dated checkpoints.
+Validated code head: `272d74bcde0b24a70e2b742e836e9cbb989bc247`.
+
+Full serial repository typecheck passed in 390.6 seconds at a live sampled
+3690.3 MiB unit peak. Full build passed in 339.4 seconds at 3793.5 MiB. Both used
+a 4096 MiB development envelope, zero unit swap and single-thread semantic
+compilation. Heap profiling found retained syntax, symbols and instantiated
+types across the full server graph. This is a measured development working set,
+separate from the packaged production server/database envelope. Semantic checks
+remain enabled. Typecheck includes tests; production build emits declarations
+and excludes test artifacts. The OpenAPI component improvement remains valid.
+
+Reconciled canonical repository coverage has 1986 passing files, 30530 passing
+cases and 26 opt-in/platform skipped files. Recorded serial groups and focused
+replacement runs cover all 2012 selected files. The earlier monolithic command
+did not exit successfully; this coverage is an evidence union, not a new command
+pass. The separate runner TypeScript suite passed 2383 cases in 165 files, with
+one file/four cases skipped. The full Rust suite subsequently passed after the
+private provider-fixture copy fix. Its earlier combined failure is superseded
+only by that explicit complete Rust rerun.
+
+Packaged/native coverage passed all 46 unique cases across 13 files. The preview
+file's seven-case rerun replaced its earlier hard-coded peak assertion, which
+incorrectly assumed a kernel counter must equal MemoryMax byte for byte. Native
+ownership, restart, cancellation, OOM recovery, prepared descriptors, quota,
+auth predicates, ACPX and OpenCode results remain valid. Source-free package
+graphs use published exports, the current fork server and packaged runner.
+Actual pinned Codex/OpenCode protocol checks used local provider fixtures.
+Paid external model calls were not part of qualification.
+
+| Recorded packaged host phase | Server RSS MiB | Server/DB unit MiB | Worker slice MiB |
+| --- | ---: | ---: | ---: |
+| Warm/light production lane | 510.3 | 736.8 | 1.5 |
+| Normal UI, same lane | 513.8 | 748.2 | 1.5 |
+| Lightweight agent, same lane | 540.8 | 820.5 | 76.2 |
+| Full serial development, single-agent lane | 613.3 | 884.4 | 4096.0 |
+| Two concurrent package workloads | 524.8 | 927.6 | 1112.7 |
+| Later recovery, concurrent lane | 546.3 | 957.1 | 56.6 |
+
+Values are live sampled maxima within each phase, not simultaneous sums. The
+worker slice includes file cache and residual cache from earlier workloads.
+Intentional OOM evidence recorded 256 MiB, 4095.9 MiB and 1024 MiB hard-boundary
+peaks in the light, full-development and concurrent lanes respectively. Each
+failed as execution_resource_limit; a later run succeeded. Controlled queued
+cancellation and full-budget successor queuing also passed. The two concurrent
+workers completed real adapter-utils typechecking and policy tests, with
+overlapping resource-unit lifetimes. Concurrent full-server compilers are not
+qualified. Explicit concurrent policy retained a full helper budget.
+
+All 1829 private API health samples and 1946 live API samples in these three
+trials returned HTTP 200. Browser evidence shows the UI under load. Control and
+worker unit swap remained zero. The host retained pre-existing swap usage; zero
+host swap is not claimed. Live MainPID remained 3723415, restarts seven and
+control-plane OOM counters zero. Recorded intentional OOMs stayed in workload
+cgroups. No host-global OOM was recorded in the measured intervals.
+
+Keep the current approximately 8 GiB host for light production, normal single
+agent use, serial full development, and the measured two-worker package workload.
+For full development use the separately measured 4 GiB shell/process worker
+envelope and serial tools. Do not assign that full budget to every retained
+provider while removing its helper headroom. Exact smaller-host minima and
+concurrent full-server builds remain outside the qualified profile.
+
+Final internal review found no unresolved correctness blocker. The complete
+master-to-head diff and prior review findings were reconciled with final results.
+No temporary paths, debug hooks or qualification-only production modules remain.
+Fixtures stay in test paths. No lockfile, CI workflow, database migration, UI
+token layer, first-party telemetry contract or OTLP allowlist changed. All known
+resource ownership, cleanup, helper admission, native session, Slack ordering
+and Git display-cache regressions have recorded passing coverage.
+
+Only the upload helper and preview assertion changed after the last full
+typecheck/build/Rust pass. Successful artifact uploads cover the helper, and the
+recorded preview rerun covers the assertion. No unaffected suite or benchmark
+was rerun for closeout. GitHub reports no head check runs; remote CI is unverified.
+Greptile was waived by the task owner. PR #3 is handed to Hossam for review,
+not approved for merge or deployment.
