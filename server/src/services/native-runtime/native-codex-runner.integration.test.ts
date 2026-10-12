@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -177,6 +177,7 @@ describeEmbeddedPostgres("native Codex server vertical slice", () => {
       environmentLeaseId: "lease-native-codex-e2e",
     });
     const logs: string[] = [];
+    const spawnGroups: string[] = [];
     const execute = executeNativeCodexRunner({
       db,
       companyId,
@@ -219,7 +220,15 @@ describeEmbeddedPostgres("native Codex server vertical slice", () => {
       onLog: async (_stream, chunk) => {
         logs.push(chunk);
       },
-      onSpawn: async () => undefined,
+      onSpawn: async meta => {
+        if (process.env.PAPERCLIP_TEST_SYSTEMD === "1") {
+          const group = await readFile(`/proc/${meta.pid}/cgroup`, "utf8");
+          expect(meta.processGroupId).toBeNull();
+          expect(group).toContain("paperclip-execution-");
+          expect(group).not.toContain("paperclipai.service");
+          spawnGroups.push(group);
+        }
+      },
     });
     const result = await execute.catch((error) => {
       throw new Error(
@@ -334,7 +343,15 @@ describeEmbeddedPostgres("native Codex server vertical slice", () => {
       onLog: async (_stream, chunk) => {
         logs.push(chunk);
       },
-      onSpawn: async () => undefined,
+      onSpawn: async meta => {
+        if (process.env.PAPERCLIP_TEST_SYSTEMD === "1") {
+          const group = await readFile(`/proc/${meta.pid}/cgroup`, "utf8");
+          expect(meta.processGroupId).toBeNull();
+          expect(group).toContain("paperclip-execution-");
+          expect(group).not.toContain("paperclipai.service");
+          spawnGroups.push(group);
+        }
+      },
     });
     expect(resumed).toMatchObject({
       exitCode: 0,
@@ -346,5 +363,9 @@ describeEmbeddedPostgres("native Codex server vertical slice", () => {
     );
     expect(providerCalls.match(/^thread\/start$/gm)).toHaveLength(1);
     expect(providerCalls.match(/^thread\/resume$/gm)).toHaveLength(1);
+    if (process.env.PAPERCLIP_TEST_SYSTEMD === "1") {
+      expect(spawnGroups).toHaveLength(2);
+      await writeFile(resolve(process.env.PAPERCLIP_SCRATCH_DIR!, "native-vertical-identities.json"), JSON.stringify(spawnGroups));
+    }
   }, 60_000);
 });

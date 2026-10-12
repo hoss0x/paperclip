@@ -20,9 +20,13 @@ import { secretService } from "../services/secrets.js";
 let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
 let db: ReturnType<typeof createDb>;
 let home: string;
+let restoreCwd: (() => void) | undefined;
 
 beforeAll(async () => {
   home = await mkdtemp(path.join(os.tmpdir(), "paperclip-hire-ai-"));
+  // Managed auth checks must inspect the fixture, not the contributor's project.
+  const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
+  restoreCwd = () => cwd.mockRestore();
   vi.stubEnv("PAPERCLIP_HOME", home);
   vi.stubEnv("PAPERCLIP_INSTANCE_ID", "hire-ai");
   database = await startEmbeddedPostgresTestDatabase("paperclip-hire-ai-db-");
@@ -31,6 +35,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await database?.cleanup();
+  restoreCwd?.();
   vi.unstubAllEnvs();
   if (home) await rm(home, { recursive: true, force: true });
 });

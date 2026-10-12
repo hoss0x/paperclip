@@ -18,6 +18,19 @@ function lease() {
 }
 
 describe("ACPX verified command lease owner", () => {
+  it("shares concurrent cleanup attempts across runtime and abort owners", async () => {
+    const initial = lease();
+    let finish!: () => void;
+    initial.close.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const owner = createAcpxCommandLeaseOwner(initial, async () => lease());
+    const first = owner.command.close();
+    const second = owner.command.close();
+    await Promise.resolve();
+    expect(initial.close).toHaveBeenCalledOnce();
+    finish(); await Promise.all([first, second]);
+    await owner.command.close();
+    expect(initial.close).toHaveBeenCalledOnce();
+  });
   it("refreshes only consumed snapshots and preserves single-use spawn enforcement", async () => {
     const first = lease();
     const second = lease();

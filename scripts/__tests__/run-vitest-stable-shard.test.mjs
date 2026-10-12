@@ -52,6 +52,15 @@ function dryRunJson(args, envOverrides = {}) {
 const SHARD_COUNT = 12;
 const SERIALIZED_SHARD_COUNT = 9;
 
+test("server shards retain route and script suites outside __tests__", () => {
+  const serialized = dryRunJson(["--mode", "serialized"]);
+  assert.ok(serialized.selectedSerializedSuites.includes("server/src/routes/setup-token-route.test.ts"));
+  assert.ok(serialized.selectedSerializedSuites.includes("server/src/services/openrouter-models.test.ts"));
+  const general = dryRunJson(["--mode", "general", "--group", "general-server",
+    "--shard-index", "0", "--shard-count", "1"]);
+  assert.ok(general.selectedGeneralServerSuites.includes("server/scripts/verify-runner-vendor-dependencies.test.mjs"));
+});
+
 
 test("the serialized shards form a complete, non-overlapping partition", () => {
   const shards = Array.from({ length: SERIALIZED_SHARD_COUNT }, (_, index) =>

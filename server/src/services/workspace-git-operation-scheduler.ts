@@ -4,6 +4,7 @@ import { setExpensiveWorkspaceGitExecutor } from "@paperclipai/adapter-utils/git
 import { runWorkspaceGitProcess } from "@paperclipai/adapter-utils/workspace-git-stream";
 import { HttpError } from "../errors.js";
 import { logger } from "../middleware/logger.js";
+import { withHostExecutionResources } from "./host-execution-resources.js";
 
 export const WORKSPACE_GIT_SCAN_ERROR_CODES = {
   saturated: "workspace_git_scan_saturated",
@@ -11,6 +12,7 @@ export const WORKSPACE_GIT_SCAN_ERROR_CODES = {
   cancelled: "workspace_git_scan_cancelled",
   outputLimit: "workspace_git_scan_output_limit",
   failed: "workspace_git_scan_failed",
+  resourceLimit: "workspace_git_scan_resource_limit",
 } as const;
 
 export type WorkspaceGitScanErrorCode =
@@ -263,7 +265,8 @@ function abortError(workspaceHash: string): WorkspaceGitScanError {
 function createSpawnRunner(input: { gitBinary: string; gitArgsPrefix: readonly string[] }): WorkspaceGitRunner {
   return async (runInput) => {
     try {
-      return await runWorkspaceGitProcess({ ...runInput, ...input, cwd: runInput.canonicalWorkspacePath });
+      return await withHostExecutionResources(runInput.signal, () =>
+        runWorkspaceGitProcess({ ...runInput, ...input, cwd: runInput.canonicalWorkspacePath }));
     } catch (error) {
       const candidate = error as { code?: WorkspaceGitScanErrorCode; details?: Record<string, unknown> };
       throw new WorkspaceGitScanError(

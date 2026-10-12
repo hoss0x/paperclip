@@ -19,7 +19,7 @@
 import express from "express";
 import { Writable } from "node:stream";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   SETUP_TOKEN_SESSION_NOT_FOUND,
@@ -465,9 +465,14 @@ async function settle(): Promise<void> {
   }
 }
 
-beforeEach(() => {
-  vi.resetModules();
+// Keep the route graph loaded once. Every app has its own transport and scope;
+// resetting the graph per case retains repeated native module imports and timers.
+beforeAll(async () => {
   registerModuleMocks();
+  await vi.importActual("../routes/agents.js");
+}, 120_000);
+
+beforeEach(() => {
   vi.clearAllMocks();
   useOwner();
   // The default registry declares the Claude setup-token capability for

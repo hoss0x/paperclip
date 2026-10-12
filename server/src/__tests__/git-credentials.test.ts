@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -233,11 +233,26 @@ describe("credential helper execution (real git, no network)", () => {
         source: "company_secret",
         secretName: "GITHUB_TOKEN",
       });
+      // Agent Git launchers can replace the fixture's token environment. Use
+      // Git's own plumbing executable with synthetic credentials and no
+      // contributor configuration; this fixture never contacts a remote.
+      const gitExecPath = execFileSync("git", ["--exec-path"], { encoding: "utf8" }).trim();
+      const plumbingGit = path.join(gitExecPath, process.platform === "win32" ? "git.exe" : "git");
+      const git = await fs.access(plumbingGit).then(() => plumbingGit, () => "git");
       return await new Promise<{ code: number | null; stdout: string; stderr: string }>(
         (resolve, reject) => {
-          const child = spawn("git", [...invocation.configArgs, "credential", "fill"], {
+          const child = spawn(git, [...invocation.configArgs, "credential", "fill"], {
             cwd,
-            env: { ...process.env, ...invocation.env },
+            // Exercise this helper independently of the contributor's own
+            // URL-scoped helpers (including native credential fences).
+            env: {
+              PATH: process.env.PATH,
+              ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
+              GIT_CONFIG_GLOBAL: os.devNull,
+              GIT_CONFIG_SYSTEM: os.devNull,
+              GIT_CONFIG_COUNT: "0",
+              ...invocation.env,
+            },
             stdio: ["pipe", "pipe", "pipe"],
           });
           let stdout = "";

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
-  MANAGED_SHIM_MARKER,
+  managedShimTargetsStore,
   readInstallManifest,
   resolveInstallStorePaths,
   type InstallStorePaths,
@@ -22,9 +22,11 @@ function hasManagedArtifacts(paths: InstallStorePaths): boolean {
     paths.manifestPath,
     paths.markerPath,
     paths.currentPath,
-    paths.shimPath,
   ].some((entry) => fs.existsSync(entry));
   if (persistentArtifacts) return true;
+  try {
+    if (managedShimTargetsStore(fs.readFileSync(paths.shimPath, "utf8"), paths)) return true;
+  } catch { /* A shared host shim does not establish this store's ownership. */ }
   try {
     return fs.readdirSync(paths.installsRoot).length > 0;
   } catch (error) {
@@ -114,7 +116,7 @@ export function managedInstallChecks(
 
   let shimValid = false;
   try {
-    shimValid = fs.readFileSync(paths.shimPath, "utf8").includes(MANAGED_SHIM_MARKER);
+    shimValid = managedShimTargetsStore(fs.readFileSync(paths.shimPath, "utf8"), paths);
   } catch {
     shimValid = false;
   }

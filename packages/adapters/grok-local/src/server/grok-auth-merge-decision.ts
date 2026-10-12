@@ -1,8 +1,5 @@
-import { execFile as execFileCallback } from "node:child_process";
+import { execFileWithResources } from "@paperclipai/adapter-utils/resource-buffered-command";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-
-const execFile = promisify(execFileCallback);
 
 // The single identity-and-freshness predicate for the Grok credential
 // copy-out lives in `grok-auth-merge-decision.cjs`. It reads only the two
@@ -53,9 +50,10 @@ export async function decideGrokAuthMerge(
   options: DecideGrokAuthMergeOptions,
 ): Promise<number> {
   try {
-    await execFile("node", [DECISION_SCRIPT_PATH, sourcePath, destinationPath]);
+    await execFileWithResources("node", [DECISION_SCRIPT_PATH, sourcePath, destinationPath], { admissionKind: "helper" });
   } catch (error) {
     const code = (error as { code?: unknown }).code;
+    if (code === "execution_resource_limit") throw error;
     if (typeof code === "number" && KNOWN_EXIT_CODES.has(code)) {
       return code;
     }

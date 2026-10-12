@@ -58,9 +58,21 @@ fn config(state_dir: &Path) -> DurableRunnerConfig {
     }
 }
 
+fn qualified_acpx_command(state_dir: &Path) -> PathBuf {
+    // Cargo inherits the contributor's umask. Qualify a private fixture copy
+    // without changing the shared build artifact or weakening the verifier.
+    let command = state_dir.join("qualified-acpx-fixture");
+    if !command.exists() {
+        fs::copy(env!("CARGO_BIN_EXE_fake-acpx-sidecar"), &command).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&command, fs::Permissions::from_mode(0o500)).unwrap();
+    }
+    command
+}
+
 fn acpx_config(state_dir: &Path, mode: &str) -> DurableRunnerConfig {
     let mut config = config(state_dir);
-    let command = PathBuf::from(env!("CARGO_BIN_EXE_fake-acpx-sidecar"));
+    let command = qualified_acpx_command(state_dir);
     config.acpx_launch_profile = Some(AcpxLaunchProfile {
         authority_digest: format!("sha256:{}", "d".repeat(64)),
         command: command.clone(),
@@ -206,7 +218,7 @@ fn prepare_payload_with_mode(directory: &Path, agent: &str, mode: &str) -> Value
             "agentRuntimePackage": runtime_package,
             "agentRuntimeVersion": runtime_version,
             "commandDigest": CODEX_ACPX_DIGEST,
-            "sidecarCommand": env!("CARGO_BIN_EXE_fake-acpx-sidecar"),
+            "sidecarCommand": qualified_acpx_command(directory),
             "sidecarArgs": [
                 "--mode",
                 mode,

@@ -5508,7 +5508,7 @@ it.each([
       commitSpy.mockRestore();
       const fixtureOutput =
         process.env.PAPERCLIP_ATTACH_TRANSITION_FIXTURE_DIRECTORY;
-      if (fixtureOutput && recoveryFault === "none") {
+      if (fixtureOutput && recoveryFault === "none" && !ordinaryFollowup) {
         const retainedArtifact = join(fixtureOutput, "paperclip-runnerd");
         await cp(options.runnerBinary, retainedArtifact, { force: false });
         expect(
@@ -6974,11 +6974,16 @@ async function verifyLiveRunnerAdoption(
   goalMidTurn = false,
   detachBeforeCleanup = false,
   startWithoutCheckpoint = false,
+  failCleanup = false,
 ) {
   const stateDirectory = await mkdtemp(join(tmpdir(), "runnerd-live-adopt-"));
   const server = createServer();
   let authority: DurablePrpControlPlane | null = null;
   const checkpoint = vi.fn(async () => undefined);
+  const cleanup = vi.fn(async () => {
+    if (failCleanup) throw new Error("owned execution unit still alive");
+  });
+  const onAuthenticated = vi.fn(async () => undefined);
   server.on("upgrade", (request, socket, head) => {
     if (!authority) {
       socket.destroy();
@@ -7113,6 +7118,8 @@ async function verifyLiveRunnerAdoption(
         processGroupId: runnerPid,
         startedAt: new Date().toISOString(),
         signal,
+        cleanup,
+        onAuthenticated,
         isAlive: () => {
           try {
             process.kill(runnerPid!, 0);
@@ -7136,6 +7143,8 @@ async function verifyLiveRunnerAdoption(
       await adopted.transport.close();
       expect(signal).not.toHaveBeenCalled();
       expect(checkpoint).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(onAuthenticated).not.toHaveBeenCalled();
       expect(duplicateLauncher).not.toHaveBeenCalled();
       expect(() => process.kill(runnerPid!, 0)).not.toThrow();
       const retained = JSON.parse(
@@ -7195,6 +7204,9 @@ async function verifyLiveRunnerAdoption(
     expect(adopted.evidence().diagnostics).toContain(
       `adopted runner ${runnerPid} authenticated to its durable PRP authority`,
     );
+    if (failCleanup) {
+      await expect(adopted.transport.close()).rejects.toThrow("owned execution unit still alive");
+    }
     if (!startWithoutCheckpoint) {
       expect(adopted.evidence().diagnostics).toContain(
         "restored adopted provider identity from the exact durable checkpoint after PRP event compaction; awaiting live confirmation",
@@ -7207,6 +7219,7 @@ async function verifyLiveRunnerAdoption(
       await adopted.detachControllerForRestart();
       await adopted.transport.close("old controller finalizer");
       expect(signal).not.toHaveBeenCalled();
+      expect(cleanup).not.toHaveBeenCalled();
       expect(() => process.kill(runnerPid!, 0)).not.toThrow();
       const retained = JSON.parse(await readFile(controlPlaneStatePath, "utf8"));
       const commandTypes = retained.commands.map((command: { type: string }) => command.type);
@@ -7229,6 +7242,10 @@ async function verifyLiveRunnerAdoption(
       );
     }
     await rm(stateDirectory, { recursive: true, force: true });
+    if (adopted && !mismatchedArtifact && !detachBeforeCleanup) {
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(onAuthenticated).toHaveBeenCalledOnce();
+    }
   }
 }
 
@@ -7237,6 +7254,8 @@ it(
   () => verifyLiveRunnerAdoption(false),
   30_000,
 );
+it("rejects adopted process containment failure before session reuse", () =>
+  verifyLiveRunnerAdoption(false, false, false, false, false, true), 30_000);
 
 it(
   "blocks adopted runner artifact drift without duplicate launch, checkpoint replacement, or process signals",

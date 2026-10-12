@@ -1,14 +1,13 @@
+import { execFileWithResources } from "@paperclipai/adapter-utils/resource-buffered-command";
+import { withHostExecutionResources } from "./host-execution-resources.js";
+import { prepareAdapterExecutionTargetRuntime, runAdapterExecutionTargetShellCommand } from "./host-execution-target.js";
 import { agentDirectoryWorkingCopyService, isAgentDirectoryCopy } from "./agent-directory-working-copies.js";
 import { createHash } from "node:crypto";
-import { execFile as execFileCallback } from "node:child_process";
-import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { and, asc, desc, eq, inArray, lte, or, isNull, isNotNull, sql } from "drizzle-orm";
 import { agents, heartbeatRuns, agentInstructionWorkingCopies as copies, type Db } from "@paperclipai/db";
 import {
-  prepareAdapterExecutionTargetRuntime,
-  runAdapterExecutionTargetShellCommand,
   type AdapterExecutionTarget,
 } from "@paperclipai/adapter-utils/execution-target";
 import { conflict, notFound } from "../errors.js";
@@ -22,7 +21,7 @@ import type { AuthorizationActor } from "./authorization.js";
 import type { EnvironmentRuntimeService } from "./environment-runtime.js";
 import { logger } from "../middleware/logger.js";
 
-const execFile = promisify(execFileCallback);
+
 type Copy = typeof copies.$inferSelect;
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const quote = (value: string) => `'${value.replaceAll("'", `'"'"'`)}'`;
@@ -159,7 +158,7 @@ export function agentInstructionWorkingCopyService(db: Db, options: { environmen
     }
     const row = (await get(input.companyId, input.runId))!;
     await assertInstructionPathSafe(localRoot, entryFile);
-    await execFile(process.execPath, ["-e", instructionGitExcludeProgram, workspace], { timeout: 15_000 });
+    await withHostExecutionResources(undefined, () => execFileWithResources(process.execPath, ["-e", instructionGitExcludeProgram, workspace], { timeout: 15_000, maxBuffer: 1024 * 1024 }), input.runId);
     await fs.mkdir(localRoot, { recursive: true, mode: 0o700 });
     for (const [name, text] of Object.entries({ ...exported.files, [entryFile]: content.toString("utf8") })) {
       const relative = instructionPath(name);

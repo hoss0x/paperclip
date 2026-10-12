@@ -306,19 +306,22 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"cursor-sessio
 
     const runnerState = {
       commands: [] as string[],
+      stdinBytes: 0,
     };
     // The managed-runtime restore path probes the generated archive with
     // `wc -c` before reading bounded `dd | base64` chunks. Keep this fixture's
     // shell seam faithful to that protocol instead of returning empty stdout
     // for every shell command.
     const runner = {
-      execute: async (input: { command: string; args?: string[]; env?: Record<string, string> }) => {
+      execute: async (input: { command: string; args?: string[]; env?: Record<string, string>; stdin?: string }) => {
         runnerState.commands.push(input.command);
+        runnerState.stdinBytes += Buffer.byteLength(input.stdin ?? "");
         // Exercise actual bounded file reads during managed-home restoration;
         // reporting empty success for every shell command hides missing bytes.
         return runChildProcess(`cursor-fresh-lease-${runnerState.commands.length}`, input.command, input.args ?? [], {
           cwd: remoteWorkspace,
           env: { ...input.env, PATH: `${input.env?.PATH ?? ""}:/usr/bin:/bin` },
+          stdin: input.stdin,
           timeoutSec: 30,
           graceSec: 5,
           onLog: async () => {},
@@ -370,6 +373,7 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"cursor-sessio
       });
 
       expect(result.exitCode).toBe(0);
+      expect(runnerState.stdinBytes).toBeGreaterThan(0);
       expect(prepareInputs).toHaveLength(2);
       expect(finalPreparedCommand).not.toBeNull();
       expect(finalPreparedCommand).toMatch(/\.local\/(bin|sbin)\/agent$/);
@@ -381,7 +385,9 @@ printf '%s\\n' '{"type":"result","subtype":"success","session_id":"cursor-sessio
       else process.env.HOME = previousHome;
       await fs.rm(rootDir, { recursive: true, force: true });
     }
-  });
+    // This fixture copies real archives through bounded shell commands. It
+    // takes about 11 seconds under the serial, memory-limited qualification.
+  }, 15_000);
 
   it("rebuilds the full assignment after an unknown-session resume", async () => {
     setPrepareCursorSandboxCommand.mockReset();

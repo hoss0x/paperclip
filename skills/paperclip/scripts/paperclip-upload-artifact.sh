@@ -431,21 +431,20 @@ fi
 for ((lookup_attempt = 1; lookup_attempt <= lookup_attempts; lookup_attempt++)); do
   existing_attachments="$(request_json GET "$api_base/issues/$issue_id/attachments")"
   attachment="$(
-    jq -nc \
-      --argjson attachments "$existing_attachments" \
+    jq -c \
       --arg runId "$PAPERCLIP_RUN_ID" \
       --arg sha256 "$file_sha256" \
       --arg originalFilename "$original_filename" \
       --arg contentType "$content_type" \
       'first(
-        $attachments[]
+        .[]
         | select(
             .originatingRunId == $runId
             and ((.sha256 // "") | ascii_downcase) == ($sha256 | ascii_downcase)
             and (.originalFilename // "") == $originalFilename
             and ((.contentType // "") | ascii_downcase) == ($contentType | ascii_downcase)
           )
-      ) // empty'
+      ) // empty' <<<"$existing_attachments"
   )"
   if [[ -n "$attachment" ]]; then
     reused_attachment=1

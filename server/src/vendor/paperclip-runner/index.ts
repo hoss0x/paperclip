@@ -10,6 +10,8 @@
 type RunnerModule = typeof import("@paperclipai/paperclip-runner");
 
 export type {
+  CodexAppServerTransport,
+  ProcessCodexTransportOptions,
   PaperclipJsonValue,
   PaperclipQuestionResponse,
   PaperclipSemanticActionBinding,
@@ -70,6 +72,7 @@ const sourceUrl = new URL(
 );
 const runner = (await import(sourceUrl.href)) as RunnerModule;
 
+export const ProcessCodexAppServerTransport = runner.ProcessCodexAppServerTransport;
 export const DurablePrpControlPlane = runner.DurablePrpControlPlane;
 export const runnerCodexDynamicToolsFit = runner.runnerCodexDynamicToolsFit;
 export const inspectWarmRunTransition = runner.inspectWarmRunTransition;

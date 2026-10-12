@@ -1,3 +1,4 @@
+import { prepareAdapterExecutionTargetRuntime } from "../host-execution-target.js";
 import fs from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
@@ -7,7 +8,6 @@ import type { Db } from "@paperclipai/db";
 import { environmentLeases, heartbeatRuns } from "@paperclipai/db";
 import type { EnvironmentLease } from "@paperclipai/shared";
 import {
-  prepareAdapterExecutionTargetRuntime,
   type AdapterExecutionTarget,
   type PreparedAdapterExecutionTargetRuntime,
 } from "@paperclipai/adapter-utils/execution-target";

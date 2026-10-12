@@ -66,6 +66,8 @@ import { executionWorkspaceService, readExecutionWorkspaceConfig } from "./execu
 import { isRuntimeOwnedGitBranch } from "./execution-workspace-branch-ownership.js";
 import { logActivity } from "./activity-log.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
+import { spawnWorkspaceRuntimeService, type WorkspaceRuntimeResourceOwner } from "./workspace-runtime-resources.js";
+import { executeWorkspaceRuntimeCommand } from "./workspace-runtime-command.js";
 import { workspaceGitOperationScheduler } from "./workspace-git-operation-scheduler.js";
 import {
   cleanupWorktreeInstanceArtifacts,
@@ -219,6 +221,7 @@ export interface RuntimeServiceRef {
 }
 
 interface RuntimeServiceRecord extends RuntimeServiceRef {
+  resourceOwner?: WorkspaceRuntimeResourceOwner;
   db?: Db;
   child: ChildProcess | null;
   leaseRunIds: Set<string>;
@@ -875,27 +878,12 @@ async function executeProcess(input: {
   stdoutBytes: number;
   stderrBytes: number;
 }> {
-  const proc = await new Promise<{
-    stdout: ProcessOutputAccumulator;
-    stderr: ProcessOutputAccumulator;
-    code: number | null;
-  }>((resolve, reject) => {
-    const child = spawn(input.command, input.args, {
-      cwd: input.cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: input.env ?? process.env,
-    });
-    const stdout = createProcessOutputCapture(input.maxStdoutBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
-    const stderr = createProcessOutputCapture(input.maxStderrBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
-    child.stdout?.on("data", (chunk) => {
-      stdout.append(String(chunk));
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr.append(String(chunk));
-    });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, code }));
+  const stdoutCapture = createProcessOutputCapture(input.maxStdoutBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
+  const stderrCapture = createProcessOutputCapture(input.maxStderrBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
+  const code = await executeWorkspaceRuntimeCommand(input, {
+    stdout: chunk => stdoutCapture.append(chunk), stderr: chunk => stderrCapture.append(chunk),
   });
+  const proc = { stdout: stdoutCapture, stderr: stderrCapture, code };
   const stdout = proc.stdout.finish();
   const stderr = proc.stderr.finish();
   return {
@@ -6281,6 +6269,7 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
           serviceKey,
           profileKind: "workspace-runtime",
           processGroupId: adoptedRecord.processGroupId ?? null,
+          resourceOwner: adoptedRecord.resourceOwner,
           exposureHandle: null,
           backendUrl: adoptedUrl,
           exposureConfig: null,
@@ -6396,9 +6385,42 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
 
   const shell = resolveShell();
   const serviceLog = await openLocalServiceLogFile(serviceKey);
+  const persistLocalRegistry = async (pid: number) => {
+    await writeLocalServiceRegistryRecord({
+      version: 1,
+      resourceOwner: record.resourceOwner,
+      serviceKey,
+      profileKind: "workspace-runtime",
+      serviceName,
+      command,
+      cwd: serviceCwd,
+      envFingerprint: serviceIdentityFingerprint,
+      port,
+      url: backendUrl,
+      pid,
+      processGroupId: pid,
+      provider: "local_process",
+      runtimeServiceId: record.id,
+      reuseKey: input.reuseKey,
+      startedAt: record.startedAt,
+      lastSeenAt: record.lastUsedAt,
+      metadata: {
+        projectId: record.projectId,
+        projectWorkspaceId: record.projectWorkspaceId,
+        executionWorkspaceId: record.executionWorkspaceId,
+        issueId: record.issueId,
+        scopeType: record.scopeType,
+        scopeId: record.scopeId,
+      },
+    });
+  };
   let child: ChildProcess;
   try {
-    child = spawn(shell, ["-lc", command], {
+    const managed = await spawnWorkspaceRuntimeService({ ownerId: record.id,
+      command: shell, args: ["-lc", command], cwd: serviceCwd, env, logFd: serviceLog.handle.fd, logPath: serviceLog.logPath,
+      persistOwnership: async owner => { record.resourceOwner = owner; await persistLocalRegistry(0); },
+    });
+    child = managed?.child ?? spawn(shell, ["-lc", command], {
       cwd: serviceCwd,
       env,
       detached: process.platform !== "win32",
@@ -6437,34 +6459,7 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
     }
   };
 
-  if (child.pid) {
-    await writeLocalServiceRegistryRecord({
-      version: 1,
-      serviceKey,
-      profileKind: "workspace-runtime",
-      serviceName,
-      command,
-      cwd: serviceCwd,
-      envFingerprint: serviceIdentityFingerprint,
-      port,
-      url: backendUrl,
-      pid: child.pid,
-      processGroupId: child.pid,
-      provider: "local_process",
-      runtimeServiceId: record.id,
-      reuseKey: input.reuseKey,
-      startedAt: record.startedAt,
-      lastSeenAt: record.lastUsedAt,
-      metadata: {
-        projectId: record.projectId,
-        projectWorkspaceId: record.projectWorkspaceId,
-        executionWorkspaceId: record.executionWorkspaceId,
-        issueId: record.issueId,
-        scopeType: record.scopeType,
-        scopeId: record.scopeId,
-      },
-    });
-  }
+  if (child.pid) await persistLocalRegistry(child.pid);
 
   const ownershipCheckedPorts = port
     ? exposureConfig
@@ -6647,6 +6642,7 @@ async function spawnLocalRuntimeService(input: StartLocalRuntimeServiceInput): P
       await terminateLocalService({
         pid: child.pid,
         processGroupId: child.pid,
+        resourceOwner: record.resourceOwner,
         port,
       });
     }
@@ -6890,6 +6886,7 @@ async function stopRuntimeService(serviceId: string) {
     await terminateLocalService({
       pid: record.child.pid,
       processGroupId: record.processGroupId ?? record.child.pid,
+      resourceOwner: record.resourceOwner,
       port: record.port,
     });
   } else if (record.providerRef) {
@@ -6898,6 +6895,7 @@ async function stopRuntimeService(serviceId: string) {
       await terminateLocalService({
         pid,
         processGroupId: record.processGroupId,
+        resourceOwner: record.resourceOwner,
         port: record.port,
       });
     }
@@ -8505,6 +8503,7 @@ export async function reconcilePersistedRuntimeServicesOnStartup(db: Db) {
           serviceKey: adoptedRecord.serviceKey,
           profileKind: "workspace-runtime",
           processGroupId: adoptedRecord.processGroupId ?? null,
+          resourceOwner: adoptedRecord.resourceOwner,
           exposureHandle: row.exposureHandle ?? null,
           backendUrl: adoptedUrl,
           exposureConfig: null,

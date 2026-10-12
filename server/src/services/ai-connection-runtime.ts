@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { withHostExecutionResources } from "./host-execution-resources.js";
 import { HttpError, unprocessable } from "../errors.js";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -356,14 +357,15 @@ export async function prepareManagedAiRuntime(
                   "current-auth.json",
                 );
                 await writeFile(destination, current, { mode: 0o600 });
-                const decision =
+                const decision = await withHostExecutionResources(undefined, async () =>
                   input.binding.provider === "openai"
                     ? await decideCodexAuthMerge(authFile, destination, {
                         errorLabel: "AI account refresh",
                       })
                     : await decideGrokAuthMerge(authFile, destination, {
                         errorLabel: "AI account refresh",
-                      });
+                      }),
+                );
                 if (decision !== 10) return;
                 await secretService(tx).rotate(
                   ref.secretId,

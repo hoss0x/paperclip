@@ -12,6 +12,8 @@ import { createDb, companies, agents, heartbeatRuns, companyMemberships, connect
 import { startEmbeddedPostgresTestDatabase } from "@paperclipai/db/test-embedded-postgres";
 import { aiConnectionService } from "../services/ai-connections.js";
 import * as executionTarget from "@paperclipai/adapter-utils/execution-target";
+import * as codexAdapter from "@paperclipai/adapter-codex-local/server";
+import { currentExecutionResources } from "@paperclipai/adapter-utils/execution-resource-context";
 import { prepareManagedAiRuntime, assertManagedAiProjectAuth } from "../services/ai-connection-runtime.js";
 import { toolAccessService } from "../services/tool-access.js";
 import { secretService } from "../services/secrets.js";
@@ -24,6 +26,7 @@ import { validateAiApiKey } from "../routes/ai-connections.js";
 let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
 let db: ReturnType<typeof createDb>;
 let home: string;
+let restoreCwd: (() => void) | undefined;
 const companyId = randomUUID();
 const otherCompanyId = randomUUID();
 const agentId = randomUUID();
@@ -34,6 +37,9 @@ const create = (userId: string, name: string, ownership: "personal" | "shared" =
 
 beforeAll(async () => {
   home = await mkdtemp(path.join(os.tmpdir(), "paperclip-ai-tests-"));
+  // Managed auth checks must inspect the fixture, not the contributor's project.
+  const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
+  restoreCwd = () => cwd.mockRestore();
   vi.stubEnv("PAPERCLIP_HOME", home);
   vi.stubEnv("PAPERCLIP_INSTANCE_ID", "ai-connection-fixture");
   database = await startEmbeddedPostgresTestDatabase("paperclip-ai-db-");
@@ -43,7 +49,7 @@ beforeAll(async () => {
   await db.insert(agents).values({ id: agentId, companyId, name: "Nova", adapterType: "claude_local" });
   await db.insert(companyMemberships).values(["alice", "bob"].map(principalId => ({ companyId, principalId, principalType: "user", status: "active", membershipRole: "member" })));
 }, 90000);
-afterAll(async () => { await database?.cleanup(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
+afterAll(async () => { await database?.cleanup(); restoreCwd?.(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
 
 describe("managed AI connections", () => {
   it.each([false, true])("reports the authoritative connection-manager capability for custom grants (manager: %s)", async (manager) => {
@@ -462,24 +468,34 @@ describe("managed AI connections", () => {
     }
   });
   it("persists the freshest refreshed credential to its original grant across a same-account reconnect", async () => {
-    const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
-    const intent = { provider: "openai" as const, method: "subscription" as const, name: "Refresh test", ownership: "personal" as const, agentIds: [], allAgents: true, loginSessionId: "fixture" };
-    const saved = await service.save(companyId, "alice", intent, auth("first", 10));
-    const runInput = { ...input, adapterType: "codex_local", responsibleUserId: "alice", binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
-    const first = await prepareManagedAiRuntime(db, runInput);
-    await writeFile(path.join(String(first.config.env.CODEX_HOME), "auth.json"), auth("refreshed", 11));
-    await first.cleanup();
-    const selected = await service.select({ ...runInput, userId: "alice" });
-    expect(await service.credential(selected)).toBe(auth("refreshed", 11));
-    const second = await prepareManagedAiRuntime(db, runInput);
-    expect(second.identity).not.toBe(first.identity);
-    // A same-account reconnect writes an older last_refresh than the run
-    // that is still open.
-    await service.save(companyId, "alice", { ...intent, connectionId: saved.connectionId }, auth("reconnect", 12));
-    await writeFile(path.join(String(second.config.env.CODEX_HOME), "auth.json"), auth("later-refresh", 13));
-    await second.cleanup();
-    // The newer refresh persists to the grant it started from.
-    expect(await service.credential(await service.select({ ...runInput, userId: "alice" }))).toBe(auth("later-refresh", 13));
+    const decide = codexAdapter.decideCodexAuthMerge;
+    const predicate = vi.spyOn(codexAdapter, "decideCodexAuthMerge").mockImplementation((...args) => {
+      if (process.env.PAPERCLIP_EXECUTION_ISOLATION === "systemd") {
+        expect(currentExecutionResources()).toMatchObject({ admissionKind: "helper", policy: { isolation: "systemd" } });
+      }
+      return decide(...args);
+    });
+    try {
+      const auth = (marker: string, hour: number) => JSON.stringify({ tokens: { account_id: "fixture-account", id_token: `id-${marker}`, access_token: `access-${marker}`, refresh_token: `refresh-${marker}` }, last_refresh: `2026-09-10T${hour}:00:00Z` });
+      const intent = { provider: "openai" as const, method: "subscription" as const, name: "Refresh test", ownership: "personal" as const, agentIds: [], allAgents: true, loginSessionId: "fixture" };
+      const saved = await service.save(companyId, "alice", intent, auth("first", 10));
+      const runInput = { ...input, adapterType: "codex_local", responsibleUserId: "alice", binding: { provider: "openai", method: "subscription", mode: "responsible_user" } as const, config: { model: "same-model" } };
+      const first = await prepareManagedAiRuntime(db, runInput);
+      await writeFile(path.join(String(first.config.env.CODEX_HOME), "auth.json"), auth("refreshed", 11));
+      await first.cleanup();
+      const selected = await service.select({ ...runInput, userId: "alice" });
+      expect(await service.credential(selected)).toBe(auth("refreshed", 11));
+      const second = await prepareManagedAiRuntime(db, runInput);
+      expect(second.identity).not.toBe(first.identity);
+      // A same-account reconnect writes an older last_refresh than the run
+      // that is still open.
+      await service.save(companyId, "alice", { ...intent, connectionId: saved.connectionId }, auth("reconnect", 12));
+      await writeFile(path.join(String(second.config.env.CODEX_HOME), "auth.json"), auth("later-refresh", 13));
+      await second.cleanup();
+      // The newer refresh persists to the grant it started from.
+      expect(await service.credential(await service.select({ ...runInput, userId: "alice" }))).toBe(auth("later-refresh", 13));
+      expect(predicate).toHaveBeenCalledTimes(2);
+    } finally { predicate.mockRestore(); }
   });
   it("resolves two concurrent OpenAI subscription write-backs by freshness, not by order", async () => {
     const userId = "concurrent-freshness-user";

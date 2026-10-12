@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFileWithResources } from "./resource-buffered-command.js";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -103,26 +103,9 @@ export async function runLocalGit(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<GitCommandResult> {
-  return await new Promise<GitCommandResult>((resolve, reject) => {
-    execFile(
-      "git",
-      ["-C", localDir, ...args],
-      {
-        timeout: options.timeout ?? 15_000,
-        maxBuffer: options.maxBuffer ?? 1024 * 128,
-        env: options.env ?? process.env,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          reject(Object.assign(error, { stdout: stdout ?? "", stderr: stderr ?? "" }));
-          return;
-        }
-        resolve({
-          stdout: stdout ?? "",
-          stderr: stderr ?? "",
-        });
-      },
-    );
+  return execFileWithResources("git", ["-C", localDir, ...args], {
+    timeout: options.timeout ?? 15_000, maxBuffer: options.maxBuffer ?? 128 * 1024,
+    env: options.env ?? process.env,
   });
 }
 

@@ -1259,7 +1259,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const processActivityMonitor: { current: CodexProcessActivityMonitorHandle | null } = { current: null };
       const resolvedMonitorTimeoutMs = monitorResolution.mode === "disabled" ? null : monitorResolution.timeoutMs;
 
-      const monitor =
+      const startMonitor = () =>
         monitorResolution.mode === "disabled"
           ? null
           : createCodexOutputInactivityMonitor({
@@ -1300,9 +1300,13 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               },
             });
 
+      const monitor: { current: ReturnType<typeof createCodexOutputInactivityMonitor> | null } = { current: null };
       const wrappedOnSpawn = async (meta: { pid: number; processGroupId: number | null; startedAt: string }) => {
         killTarget = { pid: meta.pid ?? null, processGroupId: meta.processGroupId };
-        if (monitor && resolvedMonitorTimeoutMs !== null && !executionTargetIsRemote) {
+        // Admission and workspace staging can wait without a running provider.
+        // Start inactivity accounting only when its worker identity is ready.
+        monitor.current ??= startMonitor();
+        if (monitor.current && resolvedMonitorTimeoutMs !== null && !executionTargetIsRemote) {
           processActivityMonitor.current = createCodexProcessActivityMonitor({
             pid: meta.pid,
             processGroupId: meta.processGroupId,
@@ -1310,7 +1314,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
               CODEX_PROCESS_ACTIVITY_POLL_INTERVAL_MS,
               Math.max(1_000, Math.floor(resolvedMonitorTimeoutMs / 4)),
             ),
-            onActivity: () => monitor.noteProcessActivity(),
+            onActivity: () => monitor.current?.noteProcessActivity(),
           });
         }
         if (onSpawn) {
@@ -1329,7 +1333,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           onSpawn: wrappedOnSpawn,
           onRuntimeProgress: ctx.onRuntimeProgress,
           onLog: async (stream, chunk) => {
-            monitor?.noteOutputChunk(stream, chunk);
+            monitor.current?.noteOutputChunk(stream, chunk);
             if (stream === "stdout") {
               await onLog(stream, chunk);
               return;
@@ -1361,7 +1365,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         };
       } finally {
         processActivityMonitor.current?.stop();
-        monitor?.stop();
+        monitor.current?.stop();
         if (sigkillTimer) {
           clearTimeout(sigkillTimer);
           sigkillTimer = null;

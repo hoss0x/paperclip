@@ -62,8 +62,12 @@ for (const app of arcade.apps) {
   });
 }
 
+// Reuse ICU comparators: localeCompare with options constructs a collator for
+// every comparison, adding avoidable work to each control-plane cold start.
+const catalogNameCollator = new Intl.Collator("en", { sensitivity: "base" });
+const catalogSlugCollator = new Intl.Collator();
 export const AGGREGATOR_APP_CATALOG = [...entries.values()].sort((a, b) =>
-  a.name.localeCompare(b.name, "en", { sensitivity: "base" }) || a.slug.localeCompare(b.slug));
+  catalogNameCollator.compare(a.name, b.name) || catalogSlugCollator.compare(a.slug, b.slug));
 
 /** Include provider variants and native overlaps when checking existing accounts. */
 export const COMPOSIO_APP_TOOLKITS = composio.toolkits.map(([toolkit]) => toolkit);

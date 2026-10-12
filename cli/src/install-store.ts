@@ -394,6 +394,13 @@ function isManagedShimContents(contents: string): boolean {
   );
 }
 
+/** A host-wide shim belongs to one install store, not every PAPERCLIP_HOME. */
+export function managedShimTargetsStore(contents: string, paths: InstallStorePaths): boolean {
+  const entrypoint = path.join(paths.currentPath, "node_modules", "paperclipai", "dist", "index.js");
+  return isManagedShimContents(contents)
+    && contents.split("\n").some(line => line.startsWith("exec ") && line.endsWith(` ${shellQuote(entrypoint)} "\$@"`));
+}
+
 export function writeManagedShim(paths = resolveInstallStorePaths()): void {
   assertManagedShimWritable(paths);
   const homeDir = path.dirname(path.dirname(path.dirname(paths.shimPath)));

@@ -4504,6 +4504,16 @@ done
         fs::write(&command, b"qualified node").unwrap();
         fs::write(&proxy, b"module.exports = {};\n").unwrap();
         fs::write(&executable, b"qualified opencode").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Qualified launch artifacts must be private regardless of the
+            // developer or service's umask. Keep the verifier's checks intact.
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+            for (path, mode) in [(&command, 0o700), (&proxy, 0o600), (&executable, 0o700)] {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        }
         let profile = OpenCodeLaunchProfile {
             command: qualified_artifact(&command),
             proxy_script: qualified_artifact(&proxy),

@@ -1,0 +1,877 @@
+# Execution resource governance
+
+Implementation in progress on `feat/runtime-resource-governance`. Server
+adapter dispatch now installs the shared operator resource context and persists
+unit ownership before launch. Shared child-runner and native runnerd launcher
+paths are validated through real systemd units. Direct native Codex now uses a
+stream-preserving boundary with JSON-RPC, queued cancellation and descendant
+cleanup tests. Direct OpenCode now uses the shared descriptor-preserving scope
+through an async launch hook; authenticated HTTP session startup/recovery, queued
+cancellation, descendant cleanup, OOM evidence and a later session have fixture
+coverage. Direct ACPX now prepares one server-owned session envelope and bounded
+verified command roots. Full native session/resume/restart qualification remains pending. Do not deploy this intermediate branch as a completed resource fix.
+
+## Shared boundary
+
+`packages/adapter-utils/src/systemd-execution.ts` prepares a Linux user-systemd
+transient service in a sibling cgroup. Systemd owns memory/CPU/task accounting,
+whole-cgroup signalling, and cleanup. A private invocation file carries the exact
+command, arguments, working directory and environment. Its directory has mode
+0700 and its file has mode 0600. A small loader removes that file and uses Node's
+`execve` to replace itself with the command. No extra supervisor remains, and
+stdin/stdout/stderr remain connected through `systemd-run --pipe --wait`.
+
+`execution-resource-context.ts` uses async-local storage to carry an operator
+policy, one admission pool, cancellation and an evidence sink across adapter
+calls. Within that context, `runChildProcess` reserves a whole budget before
+launch, supplies build-tool defaults, samples memory every 500 ms, and releases
+capacity only after whole-unit cleanup. The loader writes a private worker-PID
+marker before `execve`; spawn metadata and stdin gating use that PID, rather than
+the `systemd-run` client PID. Signals target the full unit. Exit results retain
+worker signal semantics and name memory failures `execution_resource_limit`.
+A pre-launch `onUnitPrepared` hook lets dispatch persist unit ownership before
+provider work can start. The native synchronous launcher seam now has a shared
+bridge that returns a handle while admission/launch proceeds asynchronously;
+it updates the handle with the worker PID and uses whole-unit signals. Raw
+process output does not gain a new native logging path. Full native protocol,
+reattach and session/resume coverage is still pending.
+Calls outside this context retain their existing direct-spawn behavior. The direct Codex backend now uses an async
+process-transport factory. `resource-stdio-process.ts` reuses policy, admission
+and systemd boundary primitives while leaving protocol decoding and diagnostic
+redaction in the transport. It reports the worker PID, signals the whole unit,
+and settles close only after descendant cleanup and terminal evidence. The
+systemd client receives operator user-manager connection variables; the provider
+receives its exact private invocation environment. Startup cancellation reaches
+admission before a process can launch. Existing runnerd/remote factory input
+contracts stay unchanged. Direct OpenCode forwards launch descriptors and startup/
+recovery signals through an operator hook. Driver close waits for whole-unit
+cleanup; the HTTP/SSE protocol and diagnostic redaction remain in the driver.
+Direct ACPX uses a server-owned envelope and prepared descriptor handoffs.
+
+Descriptor-preserving launches can instead use a transient systemd scope.
+`systemd-run --scope` retains the worker PID, process group and inherited file
+descriptors. The packaged native runner's private `--resource-exec` handoff reads
+and removes the same private invocation file, writes worker identity, and replaces
+itself through Unix `exec`. It leaves no additional supervisor. Node's
+[`process.execve`](https://nodejs.org/api/process.html#processexecvefile-args-env)
+closes descriptors beyond stdin/stdout/stderr, so the service loader cannot
+preserve verified executable and credential-fence descriptors. OpenCode uses this scope primitive without replacing its executable descriptor
+with a mutable pathname. ACPX forwards its verified descriptor layout through the
+same scope handoff.
+Startup accounting and durable ownership recognize both services and scopes.
+`prepareResourceScopeProcess` can reserve capacity and persist unit ownership
+before a verified launcher duplicates descriptors. Its single-use synchronous
+spawn returns a stable child PID, inherited pipes/descriptors, a readiness promise
+and the same tracked completion path as the async transports. Closing or cancelling
+an unused preparation releases its reservation only after cleanup. This seam is
+connected to the ACPX command resource owner. ACPX has persistent and transient command
+roots within one runtime; those roots need one run envelope, rather than competing
+for separate full-budget slots. Per-command admission with one slot could block
+status/control requests behind the runtime they must control.
+`prepareExecutionRunEnvelope` now reserves one global slot for a session and
+creates a child slice under the operator aggregate. Persistent and transient
+roots borrow that reservation. Their combined memory, swap, CPU and task use is
+bounded by the child slice, even while control commands overlap the persistent
+runtime. The owner retains capacity while the session is idle and explicitly
+closes the envelope after the session. Cancellation stops the slice and waits
+for verified root cleanup before releasing capacity; failed cleanup retains it.
+Periodic cgroup samples detect a memory kill, stop the other roots, and propagate
+the shared limit failure into each root's local run evidence. Startup recovery
+groups surviving roots by their envelope and counts its budget once. Real tests
+cover concurrent roots with a single global slot, queued cancellation, unused
+prepared roots, shared OOM containment and recovery. ACPX now uses this envelope.
+The verified ACPX installation now accepts an operator-owned synchronous process
+launcher after it constructs its exact arguments, environment and inherited
+descriptors. Native-distribution and qualified-package leases use the same seam;
+all digest, guardian and credential-fence checks remain in the verified launcher.
+The runtime host can prepare both its initial command and replacements through
+one operator callback. A real scope fixture passed guardian ownership, inherited
+credential fences, provider-exit proof and a transient verified command beside
+the persistent sentinel with one global slot. Production dispatch now selects this command resource owner through the backend
+factory and driver. Both initial and replacement leases use prepared scopes.
+The runtime host retains credential authority until graceful runtime exit proof
+and verified command-resource cleanup both complete. An idle session retains its
+budget until host close. Concurrent abort and runtime cleanup share one lease-close
+attempt; failed leases remain retryable. Full session/recovery/stress qualification
+is still pending.
+Scope mode requires the packaged runner; it never falls back to an unbounded
+launch. Scope OOM evidence comes from cgroup events and the systemd result;
+`OOMPolicy=stop` applies to services only.
+
+The boundary sets `MemoryHigh`, `MemoryMax`, `MemorySwapMax`, `CPUQuota`,
+`TasksMax`, `KillMode=control-group` and `OOMPolicy=stop`. An explicitly requested
+boundary fails if Linux cgroup v2 or the user systemd manager is unavailable.
+It does not retry outside isolation. Node.js must support `process.execve`;
+Paperclip's supported Node.js version is 24.11 or newer. Systemd must support
+`--expand-environment=no` (254 or newer).
+
+Live samples read `memory.peak` and `memory.events`; terminal properties supply
+the systemd result and main exit status. A short successful transient unit can
+unload before inspection, so unavailable measurements remain null. Do not use
+validation-unit teardown peaks as workload benchmark measurements.
+
+## Operator policy
+
+The resolver takes the **operator process environment**, never an agent's adapter
+environment. Limits below are initial implementation defaults, pending integrated
+measurement. They are not a minimum-VPS recommendation.
+
+| Environment variable | Initial default |
+| --- | --- |
+| `PAPERCLIP_EXECUTION_ISOLATION` | `auto`: systemd on Linux, `none` elsewhere |
+| `PAPERCLIP_EXECUTION_RESERVE_MIB` | Greater of 1536 MiB and 25% of host RAM |
+| `PAPERCLIP_EXECUTION_CAPACITY_MIB` | Host RAM minus reserve |
+| `PAPERCLIP_EXECUTION_MEMORY_MAX_MIB` | Lesser of 2048 MiB and one third of capacity, rounded down to MiB |
+| `PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB` | Equal to the hard limit; lower thresholds are opt-in |
+| `PAPERCLIP_EXECUTION_MEMORY_SWAP_MAX_MIB` | 0 |
+| `PAPERCLIP_EXECUTION_MAX_CONCURRENT` | Up to 2; leave one helper budget when possible, with at least one agent slot |
+| `PAPERCLIP_EXECUTION_HELPER_MAX_CONCURRENT` | 1 controller helper slot |
+| `PAPERCLIP_EXECUTION_RUNTIME_MEMORY_MAX_MIB` | Equal to the agent hard budget |
+| `PAPERCLIP_EXECUTION_CPU_QUOTA_PERCENT` | 100 (one CPU equivalent) |
+| `PAPERCLIP_EXECUTION_TASKS_MAX` | 128 |
+| `PAPERCLIP_EXECUTION_BUILD_JOBS` | 1 |
+
+The resolver rejects malformed numbers, contradictory thresholds, and capacity
+that consumes the reserved host memory. Its admission primitive reserves complete
+hard-memory budgets in FIFO order within each lane, checks both memory capacity and concurrency,
+and removes cancelled queued requests. Dispatch uses one pool across all companies/adapters in a control-plane process
+and releases capacity after verified cleanup. Initialization counts active units
+in the execution slice before accepting new work. Surviving-unit reservations
+remain until the user manager confirms termination; failed refreshes retain
+capacity. This provides restart accounting for a single controller. Multiple
+independent controllers sharing a user-manager slice do not yet share FIFO slots. `withOperatorExecutionResources` now
+prepares `paperclip-executions.slice` with `MemoryMax` equal to total admission
+capacity. Its aggregate swap cap equals the configured per-execution swap cap
+(default zero). All services launched in that context enter this slice. Limits
+survive controller restarts; runtime slice configuration is recreated after a
+user-manager restart. Existing conflicting capacity is rejected before launch.
+The real aggregate test used separate launch paths without a shared JS queue
+and proved slice OOM containment plus later recovery. The OS cap bounds memory but does not provide cross-controller FIFO scheduling.
+Legacy cancellation and stale-controller recovery stop recorded run-owned units
+and verify their inactive state before releasing ownership. Adapter output cannot
+create the reserved unit-ownership event types. Native cancellation retains its
+existing audited authority; full detach/reattach qualification is still pending.
+
+The low-memory environment supplies supported defaults for `CARGO_BUILD_JOBS`,
+`CMAKE_BUILD_PARALLEL_LEVEL`, `RAYON_NUM_THREADS`, Go runtime concurrency, and pnpm
+workspace concurrency. `GOMEMLIMIT` defaults to the lesser of the configured
+memory-high threshold and 75% of the hard limit, leaving runtime overhead headroom. It is a soft per-runtime GC target, not an RSS or process-tree limit;
+see the [Go GC guide](https://go.dev/doc/gc-guide#Memory_limit). The pinned
+TypeScript 7 `tsc` launcher executes a native compiler, so Node heap options do
+not govern its memory. Go settings apply generically to Go programs.
+Explicit tool settings survive. TypeScript has no universal safe concurrency
+environment switch. Vitest validation uses `--maxWorkers=1 --no-file-parallelism`.
+The OS hard limit remains the enforcement boundary.
+
+## Regression fixes
+
+The Slack provider-ordering test previously waited only Vitest's default one
+second for a database-backed asynchronous drain. A one-core validation reproduced
+the failure after all eight ingress receipts were saved. Bounded ten-second waits
+preserve all ordering/wake assertions; both fixture services now shut down in a
+`finally` block before database teardown.
+
+The close-readiness GET first calls `getById`, which hydrates Git display state,
+then previously repeated an uncached inspection in `getCloseReadiness`. Read-only
+readiness now shares the existing five-second display cache and its single-flight
+inspection. Archive and destructive cleanup retain the default fresh inspection.
+Database readiness and authorization are still checked on each request. This
+redundancy is separate from the proven service-cgroup OOM cause.
+
+## Validation and unfinished work
+
+Policy/admission unit tests cover capacity, FIFO ordering, cancellation,
+configuration rejection, explicit tool settings, and unsupported platforms.
+Opt-in systemd integration tests cover actual cgroup membership, stdin, exact
+environment/argument preservation, detached-descendant cancellation, cgroup OOM,
+and a successful execution after failure. Set `PAPERCLIP_TEST_SYSTEMD=1` and
+`PAPERCLIP_SCRATCH_DIR` to a run-owned scratch directory to run these tests.
+Scope tests additionally require `PAPERCLIP_TEST_RESOURCE_LOADER` pointing to the
+rebuilt native `paperclip-runnerd` binary. Server transport fixtures additionally
+select `PAPERCLIP_EXECUTION_ISOLATION=systemd`, 128 MiB memory high/max/capacity,
+and one concurrent slot. Equal high/max thresholds make the intentional hard-limit
+fixture immediate; a 96 MiB high/128 MiB max run crossed its 20-second test deadline.
+Qualification of sustained soft-threshold pressure remains pending.
+Run heavy validation inside a bounded sibling unit, never inside the live service.
+
+Server dispatch records per-unit limits and terminal evidence in the local run
+log. A memory kill overrides an adapter success or parser failure with
+`execution_resource_limit`; other provider errors retain their original meaning.
+Tests exercise failed ownership persistence, OOM projection/recovery, native
+launcher context propagation, and real surviving-unit admission reconstruction.
+
+Remaining before handoff: full direct-native session/resume/cancellation/restart
+coverage and older helper-spawn inventory, integrated
+UI/API/PostgreSQL stress and low-memory measurements, full checks, internal
+review, and the focused PR. No live deployment or resource-PR merge is authorized.
+
+## Quota polling and remaining helper paths
+
+Quota polling now installs the same operator context as run dispatch. Simultaneous
+UI polls share one request. Its 20-second deadline aborts both queued admission
+and running subprocesses. Codex quota JSON-RPC uses the shared bounded stdio
+launcher; shutdown awaits complete unit cleanup before removing private launch
+files. Quota diagnostics and incomplete RPC lines have finite buffers. HTTP-only
+quota adapters retain their existing provider request timeouts.
+
+The older `adapter-utils/acpx-engine` is a separate execution path from the native
+ACPX driver. Its patched ACPX 0.12 runtime now routes providers and host-side ACP terminal
+commands through an operator-owned launch hook and one shared run envelope.
+The packaged runner retains actual worker PID/group identity; terminal shutdown
+awaits complete unit cleanup, including detached descendants. Runtime close
+releases the session reservation only after verified slice cleanup. Missing loader
+configuration fails closed. ACPX direct-command ENOENT shell fallback is preserved.
+Real tests cover sibling cgroups, exact provider/terminal environment, one-slot
+terminal admission, provider OOM, later recovery and cancellation. Immediate
+terminal commands retain their launch identity until readiness consumes it;
+backpressured streams retain output during that wait. Terminal completion is
+settled from verified cleanup, so an already-exited child or rejected cleanup
+cannot lose its exit notification. Repeated `/bin/true`, actual shell-string
+fallback with output, and cleanup-rejection fixtures pass. ACPX 0.12
+creates an initial provider at ensureSession and a second at startTurn; both
+roots receive the same session envelope. Gemini version and Copilot help probes
+also use that launch hook, with the same sanitized provider environment and
+session budget. Their existing deadlines now signal the complete probe unit and
+wait for verified cleanup; retained output is capped at 64 KiB. Probes keep the
+original direct spawn when isolation is disabled. Focused fixtures verify probe
+cgroup membership, exact environment/arguments, and timeout cleanup of a detached
+descendant before later provider execution. A native driver qualification cannot
+prove containment of these separate paths. SSH/tar
+transport and workspace helper spawns also remain in the inventory; command
+strings executed inside an already-bounded worker must be distinguished from
+host-side controller spawns.
+
+### Host helper inventory (2026-10-07 qualification)
+
+The following paths still require resource integration or a documented bounded
+exception before the branch is ready. Timeouts and finite output alone do not
+provide an OS memory boundary.
+
+| Path | Execution location and remaining gap |
+| --- | --- |
+| `adapter-utils/src/ssh.ts` | Buffered SSH commands and Git bundle/fetch/merge helpers now use the shared buffered scope runner when a resource context is present. Paired tar/SSH and file-stream roots now use one run envelope when a resource context is present, so one partner cannot queue behind the other. Backpressure and authentication cleanup remain intact; completion waits for drained output and verified scope cleanup. Preparation/restoration context coverage remains to be qualified. |
+| `adapter-utils/src/sandbox-managed-runtime.ts` (`execTar`) | Host archive creation/extraction now uses the shared buffered scope runner when a resource context is present, including durable workspace seeds, with a finite 120-second deadline and whole-tree cleanup. Server preparation/restoration and deferred callbacks install operator policy through the shared host target wrapper; direct non-server callers still require a resource context. |
+| `adapter-utils/src/workspace-git-stream.ts` | The shared Git scheduler now uses a cgroup scope through the shared launcher. UI/API scans install an operator resource context even outside agent dispatch; admission waits count toward the scan deadline. Run-owned scans retain the controller run id for recorded-unit cancellation. Existing scheduler/output/backpressure and Git locking rules remain in place. |
+| `adapter-utils/src/git-workspace-sync.ts` (`runLocalGit`) and `server/services/execution-workspaces.ts` (`runGit`) | Shared metadata/bundle helpers now use buffered scopes when a resource context is present. Server workspace Git calls install the operator context, including calls outside dispatch. Server instruction/checkpoint/native workspace preparation and deferred restoration install the operator context. Mandatory writer locks and caller Git environment settings remain unchanged. |
+| `server/services/agent-directory-working-copies.ts` | SSH instruction staging/restoration now installs operator policy independently of dispatch. The shared server target wrapper also covers legacy instruction copies, file-checkpoint transport, and native workspace preparation, including callbacks invoked later outside the original context. |
+| `server/services/native-runtime/native-codex-runner.ts` (`executeNativeCodexRunner`) | The exported compatibility runner now installs operator policy and uses the shared stdio boundary, preserving the actual worker PID, bootstrap environment and session arguments. Completion and shutdown await whole-unit cleanup; admission cancellation releases the prepared coordinator. Source search still found no production caller. |
+
+Generated process-session commands in `execution-target.ts`, the GitHub launcher,
+and the local sandbox network proxy launch children at their execution target.
+They must inherit the target's verified boundary; a textual `spawn` match in their
+source generator does not prove a host controller launch. Native file handoff's
+`lsof` lookup is Darwin-only, with a one-second deadline and 16 KiB output cap;
+it is outside the Linux cgroup coverage claim.
+
+Rebuild and stage the release runner before packaged qualification. A stale local
+`dist/bin/paperclip-runnerd` can precede the rebuilt debug binary in resolution and
+lack the private resource handoff. Passing tests against an explicitly selected
+debug loader does not qualify that staged release artifact.
+
+Scheduled Git scans share global admission and the aggregate slice with agents.
+When agents use all capacity, scans queue until capacity is available or their
+deadline expires; they do not fall back to unrestricted execution. The stress
+qualification must assess UI behavior under this contention, including an
+operator configuration with one execution slot. Host helpers retain their
+private launch files when unit cleanup fails and log memory-limit evidence once
+per failed helper. Other direct Git, SSH and archive helpers in the table still
+require integration.
+
+Buffered commands retain exact arguments, environment and optional stdin. Their
+limits cover admission waits, buffered bytes and complete descendant cleanup;
+memory kills remain distinct from ordinary exits, timeouts and cancellation.
+Missing executables retain ENOENT/EACCES compatibility, and nonzero exits retain
+stdout/stderr diagnostics. SSH text helpers keep their existing limits; archive
+commands now have a two-minute deadline. Server workspace metadata Git commands
+keep Node's former 1 MiB output budget and gain a two-minute deadline. Tests cover
+real Git metadata/tar creation call sites and an SSH executable fixture handoff,
+alongside timeout descendants, output overflow, memory failure and recovery.
+
+Transfer groups reuse an existing session envelope or reserve one global slot for
+all local transfer roots. Each root has a scope within the shared memory/CPU/task
+budget; the two-minute deadline includes admission and completion cleanup.
+Cancellation stops complete scopes, and a memory kill reports
+`execution_resource_limit` before subsequent work is admitted. Streaming stderr
+retains a finite 128 Ki-character diagnostic tail. The SSH remote host still owns
+its remote-side resource policy; a local SSH cgroup does not govern a remote
+machine. Tests cover one-slot paired streams, delayed subscription to immediate
+exit, deadline descendants, failed partners, queued admission, shared OOM and
+recovery, and real tar streams through a local SSH executable fixture.
+
+Controller staging uses `server/services/host-execution-target.ts` for both
+preparation and later restore/snapshot-cleanup callbacks. Every invocation
+reuses an active run context or installs operator policy with the original run
+identity. The local instruction Git-exclude program also uses the buffered
+scope runner. A lightweight `native-runtime/runner-binary.ts` resolver avoids
+loading the native execution and authorized-tool graph for a helper; its old
+export remains available. Focused real tests use a mocked target transport that
+launches actual scoped commands, including deferred restore OOM and recovery.
+They prove the wrapper boundary; separate instruction/checkpoint/native workspace
+regressions cover the actual service call sites. Remote platform shell probes now use the shared server target wrapper. Model
+discovery/refresh/detection and all environment-test route branches install
+operator policy outside dispatch. Native ACPX installation verification opens
+and closes verified descriptor leases without launching a provider. It is not
+an additional child-process path. The older exported native runner is now
+governed; broader native detach/reattach/restart qualification remains open.
+
+A bounded compiler diagnostic excluded 258 colocated server test roots without
+changing the repository configuration. It still approached the existing 2.2 GiB
+validation ceiling and did not finish by the diagnostic deadline. Test inclusion
+alone does not explain the server compiler memory problem. No full server
+compiler pass or low-memory VPS claim follows from this diagnostic.
+
+
+### Discovery and compatibility runner qualification (2026-10-08)
+
+Real systemd fixtures verify registry model listing, refresh and detection outside
+agent dispatch; a 96 MiB discovery OOM is distinct from an ordinary error, and a
+later discovery succeeds. The authenticated environment-test route launches its
+fixture inside a scope, while the saved-agent redacted environment regression
+continues to pass. These cover the server context boundary; external plugins
+that bypass shared launch functions must still implement their own boundary.
+
+The older exported native Codex entry point retains the direct spawn when
+operator isolation is disabled. Under systemd, the shared service boundary
+preserves arguments, bootstrap environment and worker identity. An optional
+AbortSignal cancels queued/running launches. Both graceful shutdown and failure
+wait for descendant cleanup, and memory-limit errors propagate even when the
+provider parser would otherwise fail. A real runner/PostgreSQL vertical slice
+proved durable completion and provider session resume in two separate worker
+cgroups. A separate coordinator fixture proves literal environment preservation,
+detached-descendant cleanup, OOM classification, later recovery, and queued
+cancellation before launch. These do not qualify all native providers or control
+plane restart recovery.
+
+Validation controller units retain finite hard memory, CPU, task and runtime
+limits. The real fixture worker budget was 96 MiB inside the existing 192 MiB
+aggregate validation slice; the live managed installation was not reconfigured.
+Live cgroup samples are retained because systemd exit-time peaks under-report
+these validation units. Full repository checks and the integrated workload
+benchmark remain required before PR readiness or a minimum-VPS recommendation.
+
+### Adopted local runner containment (2026-10-08)
+
+Local runner adoption now captures its systemd unit from server-owned run events
+scoped to the company and run, checks the live PID start fingerprint and cgroup,
+and verifies the manager's unit identity and memory limit. Signals cover every
+process in that unit. After authenticated transport shutdown, cleanup verifies
+whole-unit termination even if the leader already exited. A failed cleanup
+rejects close; it does not prove the session can be reused. Authentication
+failure and detached-controller finalization do not authorize cleanup. Existing
+unmanaged pre-upgrade runners retain their prior verified-PID behavior.
+
+A real sibling-cgroup fixture kills the leader and confirms its detached child
+survives until recovered unit cleanup. Focused transport regressions check the
+authentication and detached-controller gates. This is component qualification;
+the database-backed hard-restart scenario and remaining provider lifecycle
+coverage still need qualification with the resource boundary enabled.
+
+The 40,000-file streaming fixture now sets repository-local Git identity so it
+does not depend on operator configuration. In a 1,500 MiB controller unit it
+reached the deletion lane but exceeded its 180-second deadline. This remains an
+open validation failure; the fixture timeout and resource defaults were not
+increased to claim a pass.
+
+### Worker readiness and database-backed restart qualification (2026-10-08)
+
+The synchronous launcher now exposes an asynchronous readiness barrier carrying
+the admitted worker identity. The transport waits for identity and ownership
+persistence before publishing the PID and activating its route. A launcher that
+already persisted ownership does not issue a second spawn notification. Failed
+persistence rejects readiness and aborts the complete execution unit; queued
+cancellation also rejects readiness without launching a worker.
+
+The real PostgreSQL/runner fixture now records server-owned unit events, checks
+actual cgroup membership and PID fingerprints, rejects foreign company/run
+ownership, and adopts the same runner across simulated hot and hard controller
+recovery. It observes one provider turn, three steering calls, one spawn
+notification and no retry run. This qualifies the recovery component with the
+resource boundary enabled; it does not restart the live managed instance.
+
+The deletion lane previously spawned an rm process for each pathname. It now
+checks every ancestor in each bounded 64-path batch before one quoted rm call.
+All 98 sandbox regressions passed. The four 40,000-file filename lanes passed
+in 159 seconds, then the final fixture with unusual deleted filenames passed
+alone in 163 seconds under the original 180-second deadline and 1,500 MiB
+validation ceiling. A concurrent validation run still exceeded that deadline;
+sequential heavy validation remains necessary on this host.
+
+A separate one-checker/single-threaded server compiler diagnostic exceeded
+2,200 MiB. Reducing checker count alone did not resolve compiler pressure. No
+compiler defaults, full-check success, integrated stress result or minimum-VPS
+recommendation follows from this checkpoint.
+
+### Admission review and bounded compatibility checks (2026-10-08)
+
+A real systemd review fixture found a remaining controller-helper admission gap.
+With a 96 MiB persistent root, a 192 MiB aggregate capacity and one global slot,
+a helper invoked through `withHostExecutionResources` in the same context waited
+behind the root until its three-second deadline. It succeeded after the root
+stopped. Thus unused byte capacity alone does not guarantee progress: every
+independent root also consumes a global slot. The existing shared run envelope
+allowed both roots to complete while retaining one reservation and the same run
+ceiling. ACPX already uses that envelope; this fixture does not establish safe
+helper association or lifetime ownership for other retained native sessions.
+Those paths need an explicit fix and regression coverage before stress sign-off.
+Do not bypass admission or increase concurrency to hide the dependency.
+
+The 48 native resume and six handoff compatibility tests passed sequentially in
+a bounded 1,500 MiB validation unit with a 768 MiB Node heap ceiling. These checks
+used their existing fixtures with resource isolation disabled; they supplement
+the previously recorded resource-enabled recovery proof. The broader executor
+suite exceeded the validation unit limit, including an attempt with the same
+Node heap ceiling, so a full lifecycle-suite pass remains unproven.
+
+With about 5.8 GiB host memory available before launch, a separate single-checker,
+single-threaded compiler diagnostic exceeded a 3,500 MiB hard ceiling despite
+Go concurrency and memory controls. Its sampled peak was 3,499.9 MiB. No further
+ceiling increase is justified by this result. Full server typecheck and build
+remain open. All sampled health requests were HTTP 200 and the live service
+restart count remained seven; these component checks are not the integrated
+stress benchmark or evidence for a minimum VPS size.
+
+### Separate helper slots with shared memory accounting (2026-10-08)
+
+Controller helpers now use a configurable helper slot count (one by default),
+separate from agent slots. Both lanes reserve full configured memory budgets from
+the same aggregate capacity and enter the same bounded OS slice. A helper can
+pass an agent waiting for an agent slot, but cannot exceed available bytes or
+helper concurrency. FIFO ordering remains within each lane. No extra memory
+capacity is created and no agent reservation is released to admit a helper.
+
+The controller wrapper sets helper classification; command environment and agent
+output cannot select it. Helpers inside an existing shared run envelope continue
+to use that envelope's reservation. Paired transfers can create one helper
+envelope. Controller-created unit and slice names retain their role across
+restart, so reconciliation restores both bytes and the appropriate slot count.
+Older unmarked units are conservatively counted as agent reservations. Run-owned
+unit prefixes and verified cleanup behavior remain unchanged.
+
+The previously failing dependent-helper fixture now completes alongside its
+persistent root with one agent slot and 192 MiB total capacity. Real tests check
+helper cgroup membership, OS role discovery, grouped helper accounting and
+capacity exhaustion. When agents reserve all aggregate bytes, unrelated helpers
+still queue and can time out. Default workload budgets and agent concurrency leave one full helper budget, including on smaller hosts.
+Explicit concurrency overrides must leave memory capacity for controller
+helpers if they need those helpers to progress beside fully reserved sessions;
+this implementation does not associate unrelated UI requests with an agent's
+private run envelope. Integrated stress qualification remains required.
+
+### First isolated application trial (2026-10-08)
+
+Normal test-drive startup uses a private home and unique instance. Its managed
+install doctor now recognizes shared CLI shims only when their entrypoint points
+to the selected install store. A foreign host shim cannot make an empty private
+home an incomplete managed install; actual store artifacts still require a valid
+manifest. Six regressions and targeted CLI typechecking passed.
+
+An isolated source server with private PostgreSQL and the existing built UI
+served the dashboard during bounded agent execution without browser page errors.
+All 491 sampled health requests returned 200, with a 718.5 ms maximum. Sampled
+server RSS peaked at 891.9 MiB; the separate server/DB unit peaked at 1271.3 MiB.
+Live service restarts stayed seven. This was not an acceptance pass: the build
+exceeded its subprocess deadline, the constrained run snapshot was not terminal,
+and aggregate worker memory sampling missed slice creation. Smaller VPS support
+and a successful full stress scenario remain unproven. Source UI development
+optimization also exceeded a 1500 MiB startup ceiling; built UI startup succeeded.
+
+### Corrected hard-limit application trial (2026-10-08)
+
+With the same 1024 MiB worker hard ceiling, MemoryHigh equal to MemoryMax and
+explicit GOMEMLIMIT=600MiB, the adapter-utils build and 22 policy tests passed.
+The allocation workload failed as execution_resource_limit; a later run passed.
+All 97 API samples returned 200. Live sampled worker peaks were 806.6 MiB for
+build/tests and 927.1 MiB for allocation. The kernel OOM decision was confined
+to that allocation unit; server/DB OOM counters stayed zero and live restarts
+stayed seven. These results qualify this hard-limit fixture configuration.
+The default soft threshold, full server compiler, all native/provider lifecycle
+checks, full repository checks and minimum VPS sizes remain unqualified.
+
+### OpenAPI compiler metadata boundary (2026-10-08)
+
+The private OpenAPI converter now accepts the metadata fields it reads rather
+than Zod's full recursive method surface. An isolated 548-file A/B typecheck
+passed before and after: sampled cgroup peaks fell from 652.3 to 431.3 MiB,
+and type instantiations from 1,157,784 to 402,047. JavaScript/declaration emit
+and all ten OpenAPI regressions passed. The complete 740-path OpenAPI document
+was byte-identical. These component measurements do not establish a full-server
+memory reduction or a minimum VPS size.
+
+The complete server still exceeded 2200 MiB after this change. Scratch-only
+diagnostics using all available workspace declaration exports, including a
+production-root variant excluding colocated tests, also exceeded that ceiling.
+A named database-type experiment was reverted because it did not solve the
+blocker. No compiler setting, dependency map or test exclusion was committed.
+Kernel OOM decisions remained in the owned validation cgroups; control-plane
+OOM counters stayed zero and live service restarts stayed seven. Full checks,
+remaining lifecycle/soft-pressure qualification and internal review remain open.
+
+## Default pressure qualification — 2026-10-08
+
+A real 128 MiB execution with the previous 96 MiB default soft threshold
+remained throttled for 60 seconds without reaching the hard ceiling. A smaller
+above-high allocation completed after 17.7 seconds and recorded 940 high events.
+These anonymous pages cannot be reclaimed sufficiently by the soft threshold;
+this is a poor default for compiler/provider workloads. The default now sets
+`memory.high` equal to `memory.max`. Operators can still configure a lower soft
+threshold after measuring their workload. The identical over-budget scenario
+then reported `oom-kill` in 0.343 seconds at the 128 MiB ceiling, and a subsequent
+execution succeeded in 0.163 seconds. A separate 96 MiB default-boundary regression
+also passed. Go heap headroom remains 25% of the hard limit by default.
+
+Full native executor qualification passed all 521 cases after correcting the
+fixture's binary-resolver mock to follow the earlier production module split.
+The assertions and production resolver behavior are unchanged.
+
+A bounded full-server parse/bind-only diagnostic passed in 9.33 seconds at a
+live sampled 1120.5 MiB peak: 5720 files, 1,655,125 lines and 1,079,780 symbols.
+Its retained heap profile is dominated by AST nodes and binder symbols. This
+shows substantial development compiler baseline cost before semantic checking;
+it does not establish the full check's required envelope or prove a compiler
+leak. Full semantic checking still lacks a passing measured envelope. No larger
+compiler ceiling or smaller production-VPS claim is justified by this result.
+
+## Retained native attribution gate — 2026-10-08
+
+A real shared-wrapper/Codex-transport fixture keeps its process after a first
+successful run, then triggers a 96 MiB cgroup OOM during a second run. The unit
+remains contained and cleanup succeeds, but the completion callback records
+resource evidence against the first run's captured context. The second run
+returns a generic command failure without `execution_resource_limit`. The 521
+passing executor fixtures do not prove this retained-resource ownership path.
+
+This is a confirmed shared-boundary correlation defect. It needs an authenticated
+ownership handoff for retained units and a real two-run regression. Preserve
+sessions and verified cancellation authority; disabling reuse is not an adequate
+fix. End-to-end retained-provider qualification remains open.
+
+The final serial workspace typecheck and full build both reached the server
+and exhausted the same 2200 MiB validation envelope. Runner/Rust prerequisites
+passed. The complete test command reached its 900-second deadline without a
+complete suite result or an OOM. No larger memory ceiling was used. The branch
+and draft PR remain unready; packaged production and concurrent minimum VPS
+sizes are not established.
+
+## 2026-10-09: retained native ownership handoff
+
+The retained-run attribution defect above is fixed at the shared boundary.
+A private controller lease follows the warm session. At session admission it
+verifies each retained worker's PID, actual cgroup, active unit and hard memory
+limit. It records the incoming run's unit ownership and a committed claim before
+changing the resource recorder or cancellation signal. The original unit name
+and aggregate reservation stay unchanged. Evidence that arrives during the
+handoff waits for its result. Failed persistence keeps the previous owner.
+
+Direct stdio transports, runnerd child processes and shared ACPX run envelopes
+use this lease. Cached older ACPX runtimes claim it through their private host
+handle. New control roots from an older retained factory record their active
+owner before launch. Restart recovery accepts committed transfers with the
+original unit prefix and rejects an earlier run after a later claim. Provider
+output cannot supply these controller events.
+
+A real Node JSON-RPC transport and a private PostgreSQL database verify two
+runs. Run A opens the retained process. Run B reuses its same PID, triggers a
+96 MiB cgroup OOM and receives `execution_resource_limit`. Only Run B owns the
+persisted OOM evidence. Run A cannot recover the transferred unit. Detached
+children stop, and a later session succeeds. A separate test proves that Run A's
+later abort does not stop the transport, while Run B's abort does. Native
+executor fixtures also verify the authenticated warm admission hook.
+
+These checks fix correlation and authority. They do not complete packaged
+production or concurrent-development qualification. Full server semantic
+checking still exceeds the previously tested 2200 MiB envelope; its cause and
+safe development requirement remain unresolved. The previous full test command
+also lacks a complete result. No memory ceiling was raised, minimum VPS size is
+claimed, or live installation changed. The resource PR remains draft.
+
+
+## 2026-10-09: compiler development budget investigation
+
+The native TypeScript 7 compiler completes full server semantic checking in
+single-thread mode inside a 4096 MiB validation unit with `GOMEMLIMIT=3072MiB`.
+The first completed diagnostic reported two type defects, now corrected, rather
+than a resource termination. It checked 5721 files and 1,655,459 lines, created
+1,670,686 types and 10,497,331 instantiations, and retained about 2.9 GiB after
+forced collection. Its live sampled unit peak was 4068.1 MiB, including profiling.
+The heap profile attributes retained data to AST nodes, symbols and instantiated
+types; this is a large compiler working set, not evidence of a runtime leak.
+
+The default compiler worker pool exhausted the same 4096 MiB unit despite
+`GOMAXPROCS=1`. Server build and typecheck now explicitly use the compiler's
+supported `--singleThreaded` option. This keeps all semantic and declaration
+checks and all original source roots. It changes development concurrency, not
+production execution policy. Full repository validation of this setting is
+recorded separately below when complete. These compiler measurements alone do
+not establish a minimum production VPS size.
+
+Final review also found that quota polls still occupied the agent admission
+lane. They now use the same bounded controller-helper lane as other UI helpers,
+so a retained native session cannot consume the only slot needed by a quota
+poll. Aggregate memory admission, poll cancellation and finite deadlines remain
+in effect. A real retained-root/cgroup regression covers the poll entrypoint.
+
+
+A complete semantic-only check, with the original 5721 files, passed at a sampled
+3634.7 MiB unit peak. `--noEmit` alone still performs declaration diagnostics;
+the typecheck command now disables declaration generation and declaration maps.
+The full build remains responsible for declaration validation and emission.
+A production build config excludes colocated `*.test.ts` roots, which are still
+included in the normal typecheck. Production artifacts need not contain test
+modules or their declaration files. The corrected full production JS/declaration
+emit passed inside the same 4096 MiB ceiling. The first scratch config was invalid
+because its location changed Node type-library lookup; its results are discarded.
+No checks use `--noCheck`, and no compiler source roots are removed from the
+normal server typecheck. Garbage-collection tuning alone did not fix the peak.
+
+
+Packaged qualification uses the published dependency graph with source files
+removed and Node TypeScript stripping disabled. It found two real distribution
+errors that workspace imports hid: the direct Codex transport imported the
+private runner package, and the flattened vendor layout selected the wrong
+native binary path. The transport now uses the relative vendor boundary; native
+binary selection first checks the adjacent packaged `bin` directory. The ACPX
+installation probe also uses the relative live vendor entry. Build-time checks
+reject private runner imports in compiled server modules and verify dependencies
+for all three vendor entry points. Real staged-package tests and isolated
+packaged startup are required in addition to source-mode tests.
+
+### Recovered controller resource ownership (2026-10-10)
+
+Authenticated restart recovery now restores the resource lease and terminal
+memory evidence recorder before a recovered native transport can be retained.
+PID/cgroup verification alone does not bind cancellation: the runner must first
+authenticate its durable protocol authority. Warm admission then transfers this
+replacement lease to the active run, including cancellation and OOM evidence.
+Failed cleanup retains ownership for retry.
+Failed systemd units are reset after terminal evidence persistence succeeds.
+A recorder failure preserves their terminal state so a retry can save the same
+evidence; repeated failed runs do not accumulate stale unit metadata.
+
+A real PostgreSQL/systemd regression starts an independent retained process,
+recovers it under Run A, and transfers the same PID to Run B. Run A cancellation
+does not stop it. Run B exceeds its 96 MiB budget and receives
+`execution_resource_limit` and the sole terminal OOM record. The detached child
+is removed. The old recovery implementation fails this exact regression because
+it returns no resource-limit classification. Authentication and cancellation
+unit regressions cover the authority boundary separately.
+The same real regression also waits for the survivor reservation to release,
+then proves a later bounded command succeeds without resource-limit evidence.
+
+### Early input closure (2026-10-10)
+
+The shared command launcher handles stdin pipe errors. If a command closes input
+early, `EPIPE` preserves the command's exit result instead of raising an unhandled
+server error. Unexpected input errors stop the command and reject only after
+cleanup. Real subprocess regressions cover both paths, alongside the existing
+stdin, cancellation, descendant cleanup and resource ownership cases.
+
+### Complete adapter test selection (2026-10-10)
+
+The standard full test runner now selects all configured workspace projects.
+Cursor cloud/local, Gemini, Kimi and Pi were absent from its explicit roster.
+A regression compares the runner's dry-run selection with the Vitest project
+configuration. The Cursor managed-runtime fixture now forwards archive stdin
+and checks transferred bytes. Its real archive operations have a 15-second test
+deadline; the measured bounded run took 10.8 seconds. The five added projects
+pass 213 source tests in 28 suites. Built test copies remain excluded.
+
+
+### Persistent workspace services and preparation (2026-10-11)
+
+Final launch review found two more controller-side paths: workspace preparation
+commands and persistent local preview services. Both now use the shared Linux
+boundary. This closes a gap where a project build or preview could inherit the
+control-plane cgroup.
+
+Preparation keeps its streamed output, byte counts and truncation behavior. Its
+scope shares the bounded helper lane. Admission counts toward a 30-minute
+preparation deadline. A memory failure reports `execution_resource_limit`;
+cleanup completes before the command returns. Explicitly disabled or unsupported
+isolation keeps the previous direct command behavior.
+
+A preview has its own systemd service and configurable memory budget. It remains
+bounded after the starting turn ends. Its append-only log descriptors, command,
+environment and actual workload PID retain their existing contracts. The private
+local-service registry records the runtime service UUID, unit and memory budget
+before launch. Reuse verifies PID/cgroup/unit identity. Startup reconciliation
+counts surviving preview bytes without consuming an agent or helper slot. A
+replacement listener on the previous port cannot become the owned service.
+Leader loss and Stop clean the complete unit, including detached descendants.
+Failed cleanup keeps the private owner and reservation for retry. OOM diagnostics
+identify the service UUID and retain the available terminal memory counter.
+
+Runtime admission also reserves one helper budget. Otherwise a persistent
+preview could occupy the bytes needed to serve the agent that uses it. Small-host
+agent defaults use at most one third of total execution capacity. An agent, its
+helper and an equally sized preview fit that capacity. Explicit agent budgets remain
+authoritative; a preview or later agent queues when its configured combination
+cannot retain helper headroom. Multiple previews also share the same aggregate
+cap. These are resource-policy defaults, not a VPS minimum claim.
+
+Real tests cover public workspace-service startup and cross-turn reuse, exact
+environment and worker membership, detached cleanup, a 128 MiB preview OOM,
+terminal peak evidence, later recovery, preparation OOM/recovery and adoption by
+an independent controller. That controller preserves the same PID and admits an
+agent plus its helper with one agent slot. Each fixture releases its previews
+before the next case; a prior retained preview must not distort that capacity
+measurement. Published-package qualification selects compiled modules for both
+the test controller and its independent successor.
+
+### Legacy stop compatibility (2026-10-11)
+
+A queue reservation does not make an adapter an opted-in provider stop owner.
+Registering every adapter early changed the existing process stop ordering and
+Codex signal choice, including when isolation was disabled. The wrapper now
+leaves provider registration to the existing cancellation-readiness hook. A
+separate private controller map cancels bounded queue reservations before launch.
+Direct processes retain their existing stop controller. Resource abort listeners
+apply only when a real resource unit exists.
+
+The original stop assertions remain intact. Focused regressions cover verified
+termination before terminal status, Ctrl-C for the legacy Codex process, failed
+termination/write retry, queue cancellation and subsequent execution. A test that
+holds a chat row lock now has a finite independent lock lease. It asserts the
+lease did not expire before checking admission; a test timeout cannot leave that
+intentional lock blocking later fixture cleanup.
+
+
+The default host reserve includes a 1 GiB control-plane/database envelope and
+512 MiB for the OS and administration, or 25% of host RAM when that is larger.
+The original 512 MiB preview default was below the already-measured 869.8 MiB
+packaged server/database peak. Preview defaults therefore use the full agent
+budget. This reserve and the small-host three-budget split still need final guest
+qualification; neither establishes 1 GiB support or a full-development minimum.
+
+### Preparation deadlines inside active runs (2026-10-12)
+
+Preparation now passes its deadline signal directly to the shared launcher.
+The host helper wrapper preserves an existing run context, so the preparation
+signal must also reach admission and the running unit. Queue timeout reports
+`ETIMEDOUT`, and cleanup finishes before the error returns.
+
+Two real systemd regressions shorten only the preparation timer. They cover a
+running command and exhausted aggregate capacity inside an existing run. Both
+finish at the preparation deadline, leave the parent run signal intact, release
+all reservations, and allow a later command. The unchanged baseline fails both
+cases at the independent parent cancellation deadline. Scratch import-resolution
+failures were discarded before this comparison.
+
+### Native failure during spawn recording (2026-10-12)
+
+The older exported native runner now observes its exit promise immediately.
+A worker can exceed its memory limit while durable spawn recording is pending;
+that rejection must not become an unhandled controller error. The later exit
+await still returns `execution_resource_limit`.
+
+The real native fixture delays spawn recording for three seconds. The baseline
+produces an unhandled resource-limit rejection. The fixed runner passes the same
+case, preserves worker identity and session data, removes descendants, and runs
+a later session. Queued cancellation now deliberately reserves the full aggregate
+capacity; holding only an agent slot does not exhaust the separate helper lane.
+
+### Helper cancellation and legacy ownership after handoff (2026-10-12)
+
+A nested host helper combines its caller's cancellation signal with the active
+run signal. It must not replace or ignore either signal. The real exhausted-
+capacity regression now cancels the helper promptly without cancelling the
+parent or leaving a queued reservation.
+
+Legacy cancellation and restart cleanup follow the latest committed controller
+claim. A retained unit keeps its original name, so its name prefix alone cannot
+identify its current owner. Cleanup validates controller-sourced preparation,
+checks the latest company-scoped claim, and refuses an earlier owner. A transfer
+without a committed claim also fails closed.
+
+The real PostgreSQL/systemd regression exposed the old cleanup stopping Run B's
+unit through Run A's records. It now rejects A, keeps B's transport usable, lets
+B stop the same unit, and permits a later session. The existing two-run OOM and
+cancellation cases still pass. All 23 affected helper/ownership cases pass.
+
+The Rust native-provider fixture also copies its sidecar into its private test
+directory. Cargo's output can be group-writable under a contributor's umask.
+The private copy meets the unchanged launch verifier's requirements. All 19
+native-provider cases pass without changing the shared Cargo artifact.
+
+
+## Final review closeout — 2026-10-12
+
+READY FOR HOSSAM REVIEW on the current approximately 8 GiB VPS. The task owner
+deferred exact 2 GiB and 4 GiB minimum-host sizing. No smaller-host qualification
+or minimum recommendation is claimed. No merge, deployment or live restart occurred.
+This section supersedes the incomplete gates in earlier dated checkpoints.
+Validated code head: `272d74bcde0b24a70e2b742e836e9cbb989bc247`.
+
+Full serial repository typecheck passed in 390.6 seconds at a live sampled
+3690.3 MiB unit peak. Full build passed in 339.4 seconds at 3793.5 MiB. Both used
+a 4096 MiB development envelope, zero unit swap and single-thread semantic
+compilation. Heap profiling found retained syntax, symbols and instantiated
+types across the full server graph. This is a measured development working set,
+separate from the packaged production server/database envelope. Semantic checks
+remain enabled. Typecheck includes tests; production build emits declarations
+and excludes test artifacts. The OpenAPI component improvement remains valid.
+
+Reconciled canonical repository coverage has 1986 passing files, 30530 passing
+cases and 26 opt-in/platform skipped files. Recorded serial groups and focused
+replacement runs cover all 2012 selected files. The earlier monolithic command
+did not exit successfully; this coverage is an evidence union, not a new command
+pass. The separate runner TypeScript suite passed 2383 cases in 165 files, with
+one file/four cases skipped. The full Rust suite subsequently passed after the
+private provider-fixture copy fix. Its earlier combined failure is superseded
+only by that explicit complete Rust rerun.
+
+Packaged/native coverage passed all 46 unique cases across 13 files. The preview
+file's seven-case rerun replaced its earlier hard-coded peak assertion, which
+incorrectly assumed a kernel counter must equal MemoryMax byte for byte. Native
+ownership, restart, cancellation, OOM recovery, prepared descriptors, quota,
+auth predicates, ACPX and OpenCode results remain valid. Source-free package
+graphs use published exports, the current fork server and packaged runner.
+Actual pinned Codex/OpenCode protocol checks used local provider fixtures.
+Paid external model calls were not part of qualification.
+
+| Recorded packaged host phase | Server RSS MiB | Server/DB unit MiB | Worker slice MiB |
+| --- | ---: | ---: | ---: |
+| Warm/light production lane | 510.3 | 736.8 | 1.5 |
+| Normal UI, same lane | 513.8 | 748.2 | 1.5 |
+| Lightweight agent, same lane | 540.8 | 820.5 | 76.2 |
+| Full serial development, single-agent lane | 613.3 | 884.4 | 4096.0 |
+| Two concurrent package workloads | 524.8 | 927.6 | 1112.7 |
+| Later recovery, concurrent lane | 546.3 | 957.1 | 56.6 |
+
+Values are live sampled maxima within each phase, not simultaneous sums. The
+worker slice includes file cache and residual cache from earlier workloads.
+Intentional OOM evidence recorded 256 MiB, 4095.9 MiB and 1024 MiB hard-boundary
+peaks in the light, full-development and concurrent lanes respectively. Each
+failed as execution_resource_limit; a later run succeeded. Controlled queued
+cancellation and full-budget successor queuing also passed. The two concurrent
+workers completed real adapter-utils typechecking and policy tests, with
+overlapping resource-unit lifetimes. Concurrent full-server compilers are not
+qualified. Explicit concurrent policy retained a full helper budget.
+
+All 1829 private API health samples and 1946 live API samples in these three
+trials returned HTTP 200. Browser evidence shows the UI under load. Control and
+worker unit swap remained zero. The host retained pre-existing swap usage; zero
+host swap is not claimed. Live MainPID remained 3723415, restarts seven and
+control-plane OOM counters zero. Recorded intentional OOMs stayed in workload
+cgroups. No host-global OOM was recorded in the measured intervals.
+
+Keep the current approximately 8 GiB host for light production, normal single
+agent use, serial full development, and the measured two-worker package workload.
+For full development use the separately measured 4 GiB shell/process worker
+envelope and serial tools. Do not assign that full budget to every retained
+provider while removing its helper headroom. Exact smaller-host minima and
+concurrent full-server builds remain outside the qualified profile.
+
+Final internal review found no unresolved correctness blocker. The complete
+master-to-head diff and prior review findings were reconciled with final results.
+No temporary paths, debug hooks or qualification-only production modules remain.
+Fixtures stay in test paths. No lockfile, CI workflow, database migration, UI
+token layer, first-party telemetry contract or OTLP allowlist changed. All known
+resource ownership, cleanup, helper admission, native session, Slack ordering
+and Git display-cache regressions have recorded passing coverage.
+
+Only the upload helper and preview assertion changed after the last full
+typecheck/build/Rust pass. Successful artifact uploads cover the helper, and the
+recorded preview rerun covers the assertion. No unaffected suite or benchmark
+was rerun for closeout. GitHub reports no head check runs; remote CI is unverified.
+Greptile was waived by the task owner. PR #3 is handed to Hossam for review,
+not approved for merge or deployment.

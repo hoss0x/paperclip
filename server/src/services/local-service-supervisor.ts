@@ -6,10 +6,13 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { resolveExecutionResourcePolicy } from "@paperclipai/adapter-utils/execution-resource-policy";
+import { stopWorkspaceRuntimeExecution, verifyWorkspaceRuntimeExecution, type WorkspaceRuntimeResourceOwner } from "./workspace-runtime-resources.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface LocalServiceRegistryRecord {
+  resourceOwner?: WorkspaceRuntimeResourceOwner;
   version: 1;
   serviceKey: string;
   profileKind: string;
@@ -111,6 +114,7 @@ function normalizeRegistryRecord(raw: unknown): LocalServiceRegistryRecord | nul
   }
 
   return {
+    ...(rec.resourceOwner !== undefined ? { resourceOwner: rec.resourceOwner as WorkspaceRuntimeResourceOwner } : {}),
     version: 1,
     serviceKey: rec.serviceKey,
     profileKind: rec.profileKind,
@@ -213,6 +217,15 @@ export async function findLocalServiceRegistryRecordByRuntimeServiceId(input: {
   );
   const record = records.find((entry) => entry.runtimeServiceId === input.runtimeServiceId) ?? null;
   if (!record) return null;
+  if (record.resourceOwner) {
+    if (!isPidAlive(record.pid)) {
+      await stopWorkspaceRuntimeExecution(record.resourceOwner);
+      await removeLocalServiceRegistryRecord(record.serviceKey);
+      return null;
+    }
+    // A replacement listener on the old port is not the owned execution unit.
+    await verifyWorkspaceRuntimeExecution(record.resourceOwner, record.pid);
+  }
 
   let candidate = record;
   if (!isPidAlive(candidate.pid)) {
@@ -417,6 +430,18 @@ export async function findAdoptableLocalService(input: {
   if (!record) return null;
 
   if (!isPidAlive(record.pid)) {
+    if (record.resourceOwner) await stopWorkspaceRuntimeExecution(record.resourceOwner);
+    await removeLocalServiceRegistryRecord(input.serviceKey);
+    return null;
+  }
+  if (record.resourceOwner) await verifyWorkspaceRuntimeExecution(record.resourceOwner, record.pid);
+  else if (record.profileKind === "workspace-runtime" && resolveExecutionResourcePolicy().isolation === "systemd") {
+    // An old registry entry proves local process ownership, but not containment.
+    // Restart that managed service through the bounded launcher before reuse.
+    if (!await isLikelyMatchingCommand(record) || !await doesLocalServiceRecordMatchCwd(record)) {
+      throw new Error("Uncontained workspace runtime identity changed");
+    }
+    await terminateLocalService(record);
     await removeLocalServiceRegistryRecord(input.serviceKey);
     return null;
   }
@@ -547,9 +572,13 @@ export async function touchLocalServiceRegistryRecord(
 
 export async function terminateLocalService(
   record: Pick<LocalServiceRegistryRecord, "pid" | "processGroupId"> &
-    Partial<Pick<LocalServiceRegistryRecord, "port">>,
+    Partial<Pick<LocalServiceRegistryRecord, "port" | "resourceOwner">>,
   opts?: { signal?: NodeJS.Signals; forceAfterMs?: number; verifyAfterMs?: number },
 ) {
+  if (record.resourceOwner) {
+    await stopWorkspaceRuntimeExecution(record.resourceOwner);
+    return;
+  }
   const signal = opts?.signal ?? "SIGTERM";
   const targetProcessGroup = process.platform !== "win32" && record.processGroupId && record.processGroupId > 0;
 

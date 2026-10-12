@@ -285,6 +285,8 @@ export interface RunnerProcessHandle {
     kill(signal?: NodeJS.Signals | number): boolean;
   };
   completion: Promise<RunnerProcessResult>;
+  /** Asynchronous admission/worker identity and durable ownership barrier. */
+  ready?: Promise<{ pid: number; processGroupId: number | null; startedAt: string; ownershipRecorded?: boolean }>;
   processGroupId?: number | null;
   startedAt?: string;
   /** Relaunches the same immutable process specification with a fresh ticket. */

@@ -1,3 +1,5 @@
+import { ExecutionResourceOwnership, withExecutionResourceContext, type ExecutionResourceContext } from "@paperclipai/adapter-utils/execution-resource-context";
+import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "@paperclipai/adapter-utils/execution-resource-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import {
@@ -265,7 +267,7 @@ vi.mock("../issue-recovery-actions.js", () => ({
   }),
 }));
 
-vi.mock("./native-codex-runner.js", () => ({
+vi.mock("./runner-binary.js", () => ({
   resolvePaperclipRunnerBinary: state.resolveRunnerBinary,
 }));
 
@@ -6735,6 +6737,16 @@ describe("native warm session supervision", () => {
       highestContiguousSourceSeq: 1,
       usage: null,
     };
+    const policy = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_ISOLATION: "none" }, "linux", 8 * 1024 ** 3);
+    const admission = new ExecutionResourceAdmission(policy.capacityBytes, 1);
+    const prepared = vi.fn(async () => {}), committed = vi.fn(async () => {});
+    const context = (runId: string): ExecutionResourceContext => ({ runId, policy, admission,
+      scratchDir: ".", onUnitPrepared: prepared, onOwnershipCommitted: committed });
+    const firstResources = context(base.binding.runId), secondResources = context(second.binding.runId);
+    const owner = new ExecutionResourceOwnership(firstResources);
+    firstResources.ownership = owner;
+    owner.register({ unit: `paperclip-execution-${base.binding.runId}-test.service`, memoryMaxBytes: policy.memoryMaxBytes,
+      verify: async () => {}, rebind: () => {} });
     state.execute
       .mockReset()
       .mockImplementationOnce(async (options) => {
@@ -6744,19 +6756,22 @@ describe("native warm session supervision", () => {
       })
       .mockImplementationOnce(async (options) => {
         expect(options.existingSession).toBe(sharedSession);
+        await options.onSessionAdmission?.();
+        expect(committed).toHaveBeenCalledOnce();
+        expect(secondResources.ownership).toBe(owner);
         return result;
       });
 
-    await executePaperclipNativeSession({
+    await withExecutionResourceContext(firstResources, () => executePaperclipNativeSession({
       db: leaseDb(base),
       execution: base,
       runnerInstanceId: "runner",
-    });
-    await executePaperclipNativeSession({
+    }));
+    await withExecutionResourceContext(secondResources, () => executePaperclipNativeSession({
       db: leaseDb(second),
       execution: second,
       runnerInstanceId: "runner",
-    });
+    }));
     expect(close).not.toHaveBeenCalled();
     await vi.waitFor(
       () =>

@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The cheap host-local authentication-signal route. It reads no sandbox and
 // runs no shell command or model process, so every test drives it through a
@@ -144,8 +144,16 @@ const authSignalPath = (companyId: string, type: string, environmentId?: string)
   `/api/companies/${companyId}/adapters/${type}/auth-signal${environmentId ? `?environmentId=${environmentId}` : ""}`;
 
 describe("adapter auth-signal route", () => {
+  beforeAll(async () => {
+    // Cold route transforms belong to fixture setup, not the first HTTP
+    // assertion's deadline. These mocks change values without module reloads.
+    await Promise.all([
+      vi.importActual("../routes/agents.js"),
+      vi.importActual("../middleware/index.js"),
+    ]);
+  });
+
   beforeEach(() => {
-    vi.resetModules();
     vi.clearAllMocks();
     currentActor = boardActor(OWNER_A);
     mockAccessService.decide.mockResolvedValue({

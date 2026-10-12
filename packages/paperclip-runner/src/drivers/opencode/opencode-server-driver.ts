@@ -26,6 +26,7 @@ import type {
   HarnessDriverDescriptor,
   HarnessSession,
   HarnessSessionRecoveryResult,
+  HarnessSessionRecoveryOptions,
   HarnessTranscriptSnapshot,
   OpenHarnessSessionInput,
   PersistedHarnessSession,
@@ -106,6 +107,14 @@ export interface OpenCodeServerDriverOptions {
     beforeSpawn(): void;
     afterSpawn(): void;
   };
+  /** Operator-owned OS boundary; protocol and verified launch inputs stay here. */
+  processLauncher?: (input: {
+    command: string; args: string[]; cwd: string; environment: NodeJS.ProcessEnv;
+    stdio: Array<"ignore" | "pipe" | number>; detached: boolean; signal?: AbortSignal;
+  }) => Promise<{
+    child: ChildProcess; pid: number; signal(signal: NodeJS.Signals): void;
+    completion: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  }>;
   runtimeDirectory: string;
   systemInstructions?: string;
   runtimeContext?: NativeRuntimeContextSnapshot | null;
@@ -234,6 +243,7 @@ export class OpenCodeServerDriver implements HarnessDriver {
 
   async recoverSession(
     snapshot: PersistedHarnessSession,
+    options?: HarnessSessionRecoveryOptions,
   ): Promise<HarnessSessionRecoveryResult> {
     if (
       snapshot.driverKind !== OPENCODE_SERVER_DRIVER_KIND ||
@@ -250,6 +260,7 @@ export class OpenCodeServerDriver implements HarnessDriver {
         {
           runId: snapshot.runId,
           normalizedSessionId: snapshot.normalizedSessionId,
+          signal: options?.signal,
           workingDirectory: await this.#readWorkspace(
             snapshot.normalizedSessionId,
           ),
@@ -305,6 +316,7 @@ export class OpenCodeServerDriver implements HarnessDriver {
           root,
           cwd,
           trace,
+          signal: input.signal,
           dispatch: (call) => {
             if (session === null)
               throw new Error("OpenCode session is not ready for tool calls");
@@ -361,7 +373,7 @@ export class OpenCodeServerDriver implements HarnessDriver {
       } catch (error) {
         lastError = error;
         await runtime?.close({ finalizeTrace: false });
-        if (attempt === 3 || !retryableOpenCodeStartupError(error)) {
+        if (input.signal?.aborted || attempt === 3 || !retryableOpenCodeStartupError(error)) {
           await trace?.finish({ reason: "opencode_session_start_failed" });
           throw error;
         }
@@ -1974,6 +1986,7 @@ async function startRuntime(input: {
   root: string;
   cwd: string;
   trace: ProviderTraceFileSink | null;
+  signal?: AbortSignal;
   dispatch: (call: {
     tool: string;
     callId: string;
@@ -2108,24 +2121,30 @@ async function startRuntime(input: {
     while (stdio.length <= input.options.commandFd) stdio.push("ignore");
     stdio[input.options.commandFd] = input.options.commandFd;
   }
-  input.options.commandLifecycle?.beforeSpawn();
-  const child = spawn(
-    input.options.command ?? "opencode",
-    ["serve", "--hostname", "127.0.0.1", "--port", String(port)],
-    {
-      cwd: input.cwd,
-      env: environment,
-      stdio,
+  let owned: Awaited<ReturnType<NonNullable<OpenCodeServerDriverOptions["processLauncher"]>>> | undefined;
+  let child!: ChildProcess;
+  try {
+    input.options.commandLifecycle?.beforeSpawn();
+    const launch = {
+      command: input.options.command ?? "opencode",
+      args: ["serve", "--hostname", "127.0.0.1", "--port", String(port)],
+      cwd: input.cwd, environment, stdio,
       detached: globalThis.process.platform !== "win32" && isolateProcessGroup,
-    },
-  );
-  if (child.pid !== undefined) {
-    try {
-      input.options.commandLifecycle?.afterSpawn();
-    } catch (error) {
-      child.kill("SIGKILL");
-      throw error;
-    }
+      signal: input.signal,
+    };
+    owned = await input.options.processLauncher?.(launch);
+    if (input.options.processLauncher && !owned) throw new Error("OpenCode execution boundary omitted its owned process");
+    child = owned?.child ?? spawn(launch.command, launch.args, {
+      cwd: launch.cwd, env: environment, stdio, detached: launch.detached,
+    });
+    if (child.pid !== undefined) input.options.commandLifecycle?.afterSpawn();
+  } catch (error) {
+    if (owned) { owned.signal("SIGKILL"); await owned.completion; }
+    else if (child) child.kill("SIGKILL");
+    await bridge.close().catch(() => {});
+    await rm(join(configHome, "opencode", "opencode.json"), { force: true }).catch(() => {});
+    await rm(isolatedHome, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
   let diagnostics = "";
   child.stderr?.on("data", (chunk) => {
@@ -2154,7 +2173,7 @@ async function startRuntime(input: {
     input.options.onDiagnostic?.(redactedDiagnostic);
   });
   try {
-    await new Promise<void>((resolve, reject) => {
+    if (!owned) await new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
     });
@@ -2204,7 +2223,8 @@ async function startRuntime(input: {
         await bridge.close().catch(() => {});
         if (child.exitCode === null && child.signalCode === null && child.pid) {
           try {
-            if (globalThis.process.platform === "win32" || !isolateProcessGroup)
+            if (owned) owned.signal("SIGTERM");
+            else if (globalThis.process.platform === "win32" || !isolateProcessGroup)
               child.kill("SIGTERM");
             else globalThis.process.kill(-child.pid, "SIGTERM");
           } catch {
@@ -2214,13 +2234,15 @@ async function startRuntime(input: {
         await waitForExit(child, 2_000);
         if (child.exitCode === null && child.signalCode === null && child.pid) {
           try {
-            if (globalThis.process.platform === "win32" || !isolateProcessGroup)
+            if (owned) owned.signal("SIGKILL");
+            else if (globalThis.process.platform === "win32" || !isolateProcessGroup)
               child.kill("SIGKILL");
             else globalThis.process.kill(-child.pid, "SIGKILL");
           } catch {
             child.kill("SIGKILL");
           }
         }
+        if (owned) await owned.completion;
         await rm(join(configHome, "opencode", "opencode.json"), {
           force: true,
         }).catch(() => undefined);
@@ -2234,7 +2256,8 @@ async function startRuntime(input: {
     };
   } catch (error) {
     await bridge.close().catch(() => {});
-    child.kill("SIGKILL");
+    if (owned) { owned.signal("SIGKILL"); await owned.completion; }
+    else child.kill("SIGKILL");
     await rm(join(configHome, "opencode", "opencode.json"), {
       force: true,
     }).catch(() => undefined);

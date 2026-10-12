@@ -13221,11 +13221,16 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       locked();
       await unlock;
     });
-    await holding;
+    // Vitest cannot cancel an async test on timeout. Release this intentional
+    // row lock independently, so a slow assertion cannot poison later teardown.
+    let lockExpired = false;
+    const lockLeaseTimer = setTimeout(() => { lockExpired = true; release(); }, 10_000);
     const heartbeat = heartbeatService(db);
     try {
+      await holding;
       await heartbeat.resumeQueuedRuns();
       await heartbeat.drainActiveRunExecutions();
+      expect(lockExpired).toBe(false);
       expect(
         (
           await db
@@ -13244,6 +13249,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         )[0]?.status,
       ).toBe("succeeded");
     } finally {
+      clearTimeout(lockLeaseTimer);
       release();
       await lock;
     }

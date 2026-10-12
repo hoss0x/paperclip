@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { AGGREGATOR_APP_CATALOG, COMPOSIO_APP_TOOLKITS, findComposioCatalogApp, findAggregatorApp } from "./aggregator-app-catalog.js";
 
 describe("public aggregator app catalog", () => {
+  it("preserves English case-insensitive ordering and the default-locale slug tie break", () => {
+    const originalOrder = [...AGGREGATOR_APP_CATALOG].reverse().sort((a, b) =>
+      a.name.localeCompare(b.name, "en", { sensitivity: "base" }) || a.slug.localeCompare(b.slug));
+    expect(AGGREGATOR_APP_CATALOG.map(app => app.slug)).toEqual(originalOrder.map(app => app.slug));
+  });
+
   it("indexes the full snapshots and merges provider routes for the same app", () => {
     expect(AGGREGATOR_APP_CATALOG.length).toBeGreaterThan(1500);
     const hubspot = findAggregatorApp("composio", "hubspot")!;

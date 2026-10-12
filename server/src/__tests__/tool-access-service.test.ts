@@ -1968,7 +1968,7 @@ describeEmbeddedPostgres("tool access service", () => {
       // The first replacement still owns the departing member lock, so this
       // gives cleanup time to queue for that lock before the empty replacement
       // queues for the grant lock.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(await waitForBlockedMembershipUpdate()).toBe(true);
       let replacementSettled = false;
       const replacement = replacementService
         .replaceConnectionGrantMembers(connection.id, grant.id, [])
@@ -1979,7 +1979,17 @@ describeEmbeddedPostgres("tool access service", () => {
         .finally(() => {
           replacementSettled = true;
         });
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await expect.poll(async () => {
+        const [waiting] = await db.execute<{ waiting: boolean }>(sql`
+          SELECT EXISTS (
+            SELECT 1 FROM pg_stat_activity
+            WHERE state = 'active' AND wait_event_type = 'Lock'
+              AND query ILIKE '%connection_grants%'
+              AND query ILIKE '%for update%'
+          ) AS waiting
+        `);
+        return waiting?.waiting;
+      }, { timeout: 5_000 }).toBe(true);
       expect(replacementSettled).toBe(false);
 
       releaseFirstReplacement();
@@ -14962,7 +14972,10 @@ describeEmbeddedPostgres("tool access service", () => {
       "mcp-key",
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls
+      .filter(([url]) => url === PUBLIC_MCP_FIXTURE_URL)
+      .map(([, init]) => JSON.parse(String(init?.body)).method))
+      .toEqual(["tools/list", "tools/list"]);
     expect(fetchMock).toHaveBeenCalledWith(
       PUBLIC_MCP_FIXTURE_URL,
       expect.objectContaining({
@@ -15706,6 +15719,7 @@ describeEmbeddedPostgres("tool access service", () => {
           company.id,
           {
             galleryKey: "github",
+            connectionMethodKey: "mcp-key",
             name: "GitHub rollback",
             credentialValues: { "credentials.authorization": "github-secret" },
           },
@@ -15823,6 +15837,7 @@ describeEmbeddedPostgres("tool access service", () => {
           company.id,
           {
             galleryKey: "github",
+            connectionMethodKey: "mcp-key",
             name: "GitHub reconnect",
             credentialValues: { "credentials.authorization": "old-secret" },
           },
@@ -16025,6 +16040,7 @@ describeEmbeddedPostgres("tool access service", () => {
           company.id,
           {
             galleryKey: "github",
+            connectionMethodKey: "mcp-key",
             name: "Personal GitHub reconnect",
             grantKind: "user",
             credentialValues: {
@@ -16112,6 +16128,7 @@ describeEmbeddedPostgres("tool access service", () => {
           {
             applicationId: connected.application.id,
             galleryKey: "github",
+            connectionMethodKey: "mcp-key",
             name: "Personal GitHub reconnect",
             // No grantKind is sent on reconnect: the retained connection owns that
             // decision and must reactivate this same grant rather than insert a new

@@ -5,11 +5,17 @@ vi.mock("../adapters/registry.js", () => ({
 }));
 
 import { listServerAdapters } from "../adapters/registry.js";
+vi.mock("../services/host-execution-resources.js", () => ({
+  withHostExecutionResources: vi.fn((input, execute) => execute()),
+}));
+
+import { withHostExecutionResources } from "../services/host-execution-resources.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
 
 describe("fetchAllQuotaWindows", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.mocked(withHostExecutionResources).mockClear();
   });
 
   afterEach(() => {
@@ -38,6 +44,10 @@ describe("fetchAllQuotaWindows", () => {
     await vi.advanceTimersByTimeAsync(20_001);
     const results = await promise;
 
+    const calls = vi.mocked(withHostExecutionResources).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[1]![0]?.aborted).toBe(true);
+
     expect(results).toEqual([
       {
         provider: "openai",
@@ -52,5 +62,17 @@ describe("fetchAllQuotaWindows", () => {
         windows: [],
       },
     ]);
+  });
+
+  it("shares simultaneous UI polls and permits a later refresh", async () => {
+    const getQuotaWindows = vi.fn().mockResolvedValue({ provider: "openai", ok: true, windows: [] });
+    vi.mocked(listServerAdapters).mockReturnValue([{ type: "codex_local", getQuotaWindows }] as never);
+    const first = fetchAllQuotaWindows();
+    const duplicate = fetchAllQuotaWindows();
+    expect(duplicate).toBe(first);
+    await first;
+    expect(getQuotaWindows).toHaveBeenCalledTimes(1);
+    await fetchAllQuotaWindows();
+    expect(getQuotaWindows).toHaveBeenCalledTimes(2);
   });
 });

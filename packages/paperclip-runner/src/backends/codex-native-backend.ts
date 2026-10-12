@@ -8,7 +8,7 @@ import type {
   NativeSessionBackendDescriptor,
   PersistedNativeSession,
 } from "../contracts/native-session-backend.js";
-import type { CodexAppServerTransport } from "../drivers/codex/app-server-transport.js";
+import type { ProcessCodexTransportOptions, CodexAppServerTransport } from "../drivers/codex/app-server-transport.js";
 import { CodexAppServerDriver } from "../drivers/codex/codex-app-server-driver.js";
 import type { CodexWorkingDirectoryAuthority } from "../drivers/codex/codex-boundaries.js";
 import { HarnessDriverBackend } from "./harness-driver-backend.js";
@@ -29,6 +29,7 @@ export interface CodexNativeSessionBackendOptions {
     processGroupId: number | null;
     startedAt: string;
   }) => Promise<void>;
+  processTransportFactory?: (options: ProcessCodexTransportOptions) => Promise<CodexAppServerTransport>;
   transportFactory?: (context?: {
     providerRecoveryPolicy?: PersistedNativeSession["providerRecoveryPolicy"];
     persistedSession?: Pick<
@@ -178,6 +179,7 @@ function createTransportBackedNativeSessionBackend(
         options.runnerInstanceId ?? `paperclip-native-${input.binding.runId}`,
       onSpawn: options.onSpawn,
       transportFactory: options.transportFactory,
+      processTransportFactory: options.processTransportFactory,
       dynamicTools: options.dynamicTools,
       dynamicToolHandler: options.dynamicToolHandler,
       completionFeedback: options.completionFeedback,

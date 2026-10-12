@@ -1,3 +1,4 @@
+import { resolveDefaultCapabilityRunnerBinary } from "./runner-binary-layout.js";
 import { isAcpxCanonicalInputMethod } from "../drivers/acpx/profile-extensions.js";
 import { RunnerdTraceFrameIndex } from "./runnerd-trace-frame-index.js";
 import { waitForWarmAttachmentReadiness } from "./warm-attachment-readiness.js";
@@ -83,7 +84,6 @@ import { RUNNERD_CANONICAL_ITEM } from "../drivers/codex/codex-driver-values.js"
 // build artifacts do not. Normalize once so a source build cannot be
 // misclassified as an external provider pack by a string-only comparison.
 const packageRoot = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const MAX_NOTIFICATION_COUNT = 2_048;
 const MAX_NOTIFICATION_BYTES = 4 * 1024 * 1024;
 const RUNNER_CLIENT_VERSION = "0.3.0";
@@ -1257,6 +1257,9 @@ export interface CapabilityRunnerdCodexTransportOptions {
     startedAt: string;
     isAlive: () => Promise<boolean> | boolean;
     signal?: (signal: NodeJS.Signals) => Promise<boolean> | boolean;
+    /** Whole-unit containment captured by the controller from durable ownership. */
+    cleanup?: () => Promise<void>;
+    onAuthenticated?: () => Promise<void>;
   };
 }
 
@@ -3352,7 +3355,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   readonly #root: string;
   readonly #ownsRoot: boolean;
   readonly #queue = new NotificationQueue();
-  readonly #startedAt = new Date().toISOString();
+  #startedAt = new Date().toISOString();
   readonly #evidence: CapabilityRunnerdProcessEvidence;
   #handler: CodexServerRequestHandler = async () => ({
     success: false,
@@ -3995,10 +3998,12 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
   }
 
   async #publishSpawnedProcess(handle: RunnerProcessHandle): Promise<void> {
-    this.#evidence.runnerPid = handle.child.pid ?? null;
-    this.#evidence.runnerProcessGroupId = handle.processGroupId ?? null;
+    const identity = await handle.ready;
+    this.#startedAt = identity?.startedAt ?? handle.startedAt ?? this.#startedAt;
+    this.#evidence.runnerPid = identity?.pid ?? handle.child.pid ?? null;
+    this.#evidence.runnerProcessGroupId = identity ? identity.processGroupId : handle.processGroupId ?? null;
     this.#publish();
-    if (handle.child.pid !== undefined) {
+    if (handle.child.pid !== undefined && !identity?.ownershipRecorded) {
       await this.options.onSpawn?.({
         pid: handle.child.pid,
         processGroupId: handle.processGroupId ?? null,
@@ -4336,6 +4341,9 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
             ? null
             : this.#controlPlaneCheckpoint,
         forceKill: async () => {
+          if (adoptedRunner && this.#adoptedRunnerAuthenticated) {
+            await adoptedRunner.cleanup?.();
+          }
           const handle = this.#handle;
           if (!handle || this.#evidence.runnerExited) return;
           handle.child.kill("SIGKILL");
@@ -6481,6 +6489,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
       throw failure;
     }
     this.#adoptedRunnerAuthenticated = true;
+    await adoptedRunner.onAuthenticated?.();
     this.#diagnostic(
       `adopted runner ${adoptedRunner.pid} authenticated to its durable PRP authority`,
     );
@@ -6706,15 +6715,7 @@ class DurablePrpCodexTransport implements CodexAppServerTransport {
 }
 
 export function defaultCapabilityRunnerdBinary(): string {
-  const staged = resolve(
-    packageRoot,
-    `dist/bin/paperclip-runnerd${executableSuffix}`,
-  );
-  if (existsSync(staged)) return staged;
-  return resolve(
-    packageRoot,
-    `runner/target/debug/paperclip-runnerd${executableSuffix}`,
-  );
+  return resolveDefaultCapabilityRunnerBinary(import.meta.url);
 }
 
 /** Starts an authenticated durable PRP authority, runnerd, and Codex provider transport. */

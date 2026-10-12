@@ -11,6 +11,12 @@ import {
 } from "./workspace-git-operation-scheduler.js";
 import { WORKSPACE_GIT_SCAN_SATURATED_CODE } from "@paperclipai/adapter-utils/git-workspace-sync";
 
+// Scheduler unit tests do not require a Linux user manager. The opt-in host
+// resource integration suite tests the real boundary and operator context.
+vi.mock("./host-execution-resources.js", () => ({
+  withHostExecutionResources: async (_signal: AbortSignal | undefined, execute: () => Promise<unknown>) => execute(),
+}));
+
 const tempPaths: string[] = [];
 
 async function makeWorkspace(name = "workspace"): Promise<string> {
