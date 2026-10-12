@@ -1,7 +1,7 @@
 import { resolvePaperclipRunnerBinary } from "./native-runtime/runner-binary.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull, desc, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { heartbeatRunEvents } from "@paperclipai/db";
 import type { AdapterExecutionResult } from "@paperclipai/adapter-utils";
@@ -85,11 +85,29 @@ export async function stopRecordedLegacyExecutionUnits(db: Db, run: { id: string
   if (process.platform !== "linux" || run.runtimeMode === "native") return false;
   const rows = await db.select({ payload: heartbeatRunEvents.payload }).from(heartbeatRunEvents).where(and(
     eq(heartbeatRunEvents.companyId, run.companyId), eq(heartbeatRunEvents.runId, run.id),
-    eq(heartbeatRunEvents.eventType, RESOURCE_UNIT_PREPARED),
+    eq(heartbeatRunEvents.eventType, RESOURCE_UNIT_PREPARED), isNull(heartbeatRunEvents.sourceEventId),
   ));
   const prefix = `paperclip-execution-${run.id.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-`;
-  const units = new Set(rows.map(row => row.payload?.unit).filter((unit): unit is string =>
-    typeof unit === "string" && unit.startsWith(prefix) && /^paperclip-execution-[a-zA-Z0-9-]+\.(?:service|scope)$/.test(unit)));
+  const units = new Set<string>();
+  for (const row of rows) {
+    const payload = row.payload ?? {};
+    const unit = payload.unit;
+    if (typeof unit !== "string" || !/^paperclip-execution-[a-zA-Z0-9-]+\.(?:service|scope)$/.test(unit)) continue;
+    const originalPrefix = typeof payload.originRunId === "string" && typeof payload.previousRunId === "string"
+      ? `paperclip-execution-${payload.originRunId.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 48)}-` : undefined;
+    if (!unit.startsWith(prefix) && !(originalPrefix && unit.startsWith(originalPrefix))) continue;
+    if (units.has(unit)) continue;
+    // Unit names retain the first run's prefix. Cancellation and restart
+    // cleanup must follow the latest committed controller claim instead.
+    const [latest] = await db.select({ runId: heartbeatRunEvents.runId }).from(heartbeatRunEvents)
+      .where(and(eq(heartbeatRunEvents.companyId, run.companyId),
+        eq(heartbeatRunEvents.eventType, "execution_resource_claimed"), isNull(heartbeatRunEvents.sourceEventId),
+        sql`${heartbeatRunEvents.payload}->'units' ? ${unit}`))
+      .orderBy(desc(heartbeatRunEvents.id)).limit(1);
+    if (latest && latest.runId !== run.id) throw new Error("Execution unit belongs to a later run");
+    if (!unit.startsWith(prefix) && !latest) throw new Error("Execution resource handoff was not committed");
+    units.add(unit);
+  }
   for (const unit of units) {
     const stdout = await systemctl(["show", unit, "--property=LoadState", "--value"], 5_000);
     if (stdout.trim() === "not-found") continue;

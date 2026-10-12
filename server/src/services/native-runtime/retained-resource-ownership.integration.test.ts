@@ -10,7 +10,7 @@ import { agents, companies, createDb, heartbeatRuns, heartbeatRunEvents } from "
 import { eq } from "drizzle-orm";
 import { startEmbeddedPostgresTestDatabase } from "../../__tests__/helpers/embedded-postgres.js";
 import { recoverRecordedExecutionUnit } from "./recovered-execution-unit.js";
-import { executeWithResourceGovernance } from "../execution-resources.js";
+import { executeWithResourceGovernance, stopRecordedLegacyExecutionUnits } from "../execution-resources.js";
 import { createResourceCodexTransport } from "./resource-codex-transport.js";
 
 const ctl = promisify(execFile);
@@ -127,5 +127,53 @@ if(r.id!==undefined)console.log(JSON.stringify({id:r.id,result:{pid:process.pid,
       await ctl("systemctl", ["--user", "revert", testSlice]);
     }
   }, 30_000);
+
+  it("stops only the current legacy owner after a retained unit transfers between runs", async () => {
+    const runA = randomUUID(), runB = randomUUID();
+    const seqs = new Map<string, number>();
+    let transport: CodexAppServerTransport | undefined;
+    let owner: ExecutionResourceOwnership | undefined;
+    const run = (runId: string, execute: () => Promise<AdapterExecutionResult>) => executeWithResourceGovernance({
+      runId, scratchDir: process.env.PAPERCLIP_SCRATCH_DIR!, slice: testSlice,
+      signal: new AbortController().signal,
+      record: async event => {
+        if (!seqs.has(runId)) {
+          await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running", runtimeMode: "legacy" });
+          seqs.set(runId, 0);
+        }
+        const seq = seqs.get(runId)! + 1; seqs.set(runId, seq);
+        await db.insert(heartbeatRunEvents).values({ companyId, agentId, runId, seq,
+          eventType: event.eventType, stream: "system", payload: event.payload });
+      },
+    }, execute);
+    try {
+      await run(runA, async () => {
+        owner = currentExecutionResources()!.ownership!;
+        transport = await createResourceCodexTransport(runA)!({ command: process.execPath, args: ["-e", program],
+          environment: { PATH: process.env.PATH! } });
+        await transport.request("initialize", {});
+        return { exitCode: 0, signal: null, timedOut: false };
+      });
+      await run(runB, async () => {
+        await owner!.handoff(currentExecutionResources()!);
+        await expect(stopRecordedLegacyExecutionUnits(db, { id: runA, companyId, runtimeMode: "legacy" }))
+          .rejects.toThrow("belongs to a later run");
+        expect(await transport!.request("initialize", {})).toHaveProperty("pid");
+        expect(await stopRecordedLegacyExecutionUnits(db, { id: runB, companyId, runtimeMode: "legacy" })).toBe(true);
+        await transport!.close();
+        return { exitCode: 0, signal: null, timedOut: false };
+      });
+      await run(randomUUID(), async () => {
+        transport = await createResourceCodexTransport(randomUUID())!({ command: process.execPath, args: ["-e", program],
+          environment: { PATH: process.env.PATH! } });
+        await transport.request("initialize", {}); await transport.close();
+        return { exitCode: 0, signal: null, timedOut: false };
+      });
+    } finally {
+      await transport?.close().catch(() => {});
+      await ctl("systemctl", ["--user", "stop", testSlice]);
+      await ctl("systemctl", ["--user", "revert", testSlice]);
+    }
+  }, 60_000);
 
 });

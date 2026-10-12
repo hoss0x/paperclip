@@ -768,3 +768,26 @@ produces an unhandled resource-limit rejection. The fixed runner passes the same
 case, preserves worker identity and session data, removes descendants, and runs
 a later session. Queued cancellation now deliberately reserves the full aggregate
 capacity; holding only an agent slot does not exhaust the separate helper lane.
+
+### Helper cancellation and legacy ownership after handoff (2026-10-12)
+
+A nested host helper combines its caller's cancellation signal with the active
+run signal. It must not replace or ignore either signal. The real exhausted-
+capacity regression now cancels the helper promptly without cancelling the
+parent or leaving a queued reservation.
+
+Legacy cancellation and restart cleanup follow the latest committed controller
+claim. A retained unit keeps its original name, so its name prefix alone cannot
+identify its current owner. Cleanup validates controller-sourced preparation,
+checks the latest company-scoped claim, and refuses an earlier owner. A transfer
+without a committed claim also fails closed.
+
+The real PostgreSQL/systemd regression exposed the old cleanup stopping Run B's
+unit through Run A's records. It now rejects A, keeps B's transport usable, lets
+B stop the same unit, and permits a later session. The existing two-run OOM and
+cancellation cases still pass. All 23 affected helper/ownership cases pass.
+
+The Rust native-provider fixture also copies its sidecar into its private test
+directory. Cargo's output can be group-writable under a contributor's umask.
+The private copy meets the unchanged launch verifier's requirements. All 19
+native-provider cases pass without changing the shared Cargo artifact.

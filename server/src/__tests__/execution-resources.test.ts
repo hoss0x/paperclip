@@ -4,8 +4,10 @@ import { resourceSafeAdapterEventType, stopRecordedLegacyExecutionUnits } from "
 
 const run = { id: "run-1", companyId: "company-1", runtimeMode: "legacy" };
 const unit = "paperclip-execution-run-1-unit.service";
-function fixture(payloads: Record<string, unknown>[]) {
-  const where = vi.fn(async () => payloads.map(payload => ({ payload })));
+function fixture(payloads: Record<string, unknown>[], latestRunId?: string) {
+  const where = vi.fn(() => Object.assign(Promise.resolve(payloads.map(payload => ({ payload }))), {
+    orderBy: () => ({ limit: async () => latestRunId ? [{ runId: latestRunId }] : [] }),
+  }));
   const from = vi.fn(() => ({ where }));
   const select = vi.fn(() => ({ from }));
   return { db: { select } as unknown as Db, select, where };
@@ -22,11 +24,26 @@ describe("durable legacy resource-unit cancellation", () => {
       return args.includes("--property=LoadState") ? "loaded\n" : args.includes("--property=ActiveState") ? "inactive\n" : "";
     });
     expect(await stopRecordedLegacyExecutionUnits(db, run, systemctl)).toBe(true);
-    expect(where).toHaveBeenCalledOnce();
+    expect(where).toHaveBeenCalledTimes(2);
     expect(calls).toEqual([
       ["show", unit, "--property=LoadState", "--value"], ["stop", unit],
       ["show", unit, "--property=ActiveState", "--value"], ["reset-failed", unit],
     ]);
+  });
+
+  it("rejects an earlier owner before signaling a unit claimed by a later run", async () => {
+    const { db } = fixture([{ unit }], "run-2");
+    const systemctl = vi.fn();
+    await expect(stopRecordedLegacyExecutionUnits(db, run, systemctl)).rejects.toThrow("belongs to a later run");
+    expect(systemctl).not.toHaveBeenCalled();
+  });
+
+  it("requires a committed claim before stopping a retained unit from an earlier run", async () => {
+    const { db } = fixture([{ unit, originRunId: "run-1", previousRunId: "run-1" }]);
+    const systemctl = vi.fn();
+    await expect(stopRecordedLegacyExecutionUnits(db, { ...run, id: "run-2" }, systemctl))
+      .rejects.toThrow("handoff was not committed");
+    expect(systemctl).not.toHaveBeenCalled();
   });
 
   it("treats unloaded owned units as already stopped", async () => {
