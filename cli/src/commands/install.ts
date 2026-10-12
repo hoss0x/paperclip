@@ -36,6 +36,14 @@ export type CommandRunner = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 type ReleasePackageEntry = { dir: string; name: string };
+type GitWorkspacePackageJson = {
+  version?: string;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  bundleDependencies?: string[];
+  bundledDependencies?: string[];
+};
 
 export async function runCommandWithDiagnostics(
   file: string,
@@ -303,13 +311,79 @@ export async function installGitPayload(repo: string, sha: string, runCommand: C
 
     const metadata = JSON.parse(fs.readFileSync(path.join(checkoutPath, "cli", "package.json"), "utf8")) as { version: string };
     const workspacePackages = resolveGitInstallWorkspacePackages(checkoutPath);
+    const workspaceVersions = new Map<string, string>();
+
+    for (const workspacePackage of workspacePackages) {
+      const workspaceManifest = JSON.parse(
+        fs.readFileSync(
+          path.join(checkoutPath, workspacePackage.dir, "package.json"),
+          "utf8",
+        ),
+      ) as GitWorkspacePackageJson;
+
+      if (!workspaceManifest.version) {
+        throw new Error(
+          `Git install workspace package ${workspacePackage.name} does not declare a version.`,
+        );
+      }
+
+      workspaceVersions.set(workspacePackage.name, workspaceManifest.version);
+    }
     for (const [index, workspacePackage] of workspacePackages.entries()) {
       const packageDir = path.join(checkoutPath, workspacePackage.dir);
-      const packageJson = JSON.parse(fs.readFileSync(path.join(packageDir, "package.json"), "utf8")) as { bundleDependencies?: string[]; bundledDependencies?: string[] };
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(packageDir, "package.json"), "utf8"),
+      ) as GitWorkspacePackageJson;
       const bundledDependencies = packageJson.bundleDependencies ?? packageJson.bundledDependencies ?? [];
       if (bundledDependencies.length > 0) {
         const stagedPackage = path.join(stagingRoot, `workspace-package-${index}`);
         await runCommand(process.execPath, [path.join(checkoutPath, "scripts", "prepare-bundled-package.mjs"), packageDir, stagedPackage], { cwd: checkoutPath, env: buildEnv(), maxBuffer: 32 * 1024 * 1024 });
+
+        // prepare-bundled-package materializes workspace:* using the parent
+        // package version. Git-ref installs may contain independently-versioned
+        // workspace packages, so rewrite those references to their real versions.
+        const stagedManifestPath = path.join(stagedPackage, "package.json");
+        const stagedManifest = JSON.parse(
+          fs.readFileSync(stagedManifestPath, "utf8"),
+        ) as GitWorkspacePackageJson;
+
+        for (const section of [
+          "dependencies",
+          "optionalDependencies",
+          "peerDependencies",
+        ] as const) {
+          const sourceDependencies = packageJson[section];
+          const stagedDependencies = stagedManifest[section];
+
+          if (!sourceDependencies || !stagedDependencies) continue;
+
+          for (const [dependencyName, specifier] of Object.entries(sourceDependencies)) {
+            if (!specifier.startsWith("workspace:")) continue;
+
+            const dependencyVersion = workspaceVersions.get(dependencyName);
+            if (!dependencyVersion) {
+              throw new Error(
+                `Git install cannot resolve workspace version for ${dependencyName}.`,
+              );
+            }
+
+            const range = specifier.slice("workspace:".length);
+
+            stagedDependencies[dependencyName] =
+              range === "^"
+                ? `^${dependencyVersion}`
+                : range === "~"
+                  ? `~${dependencyVersion}`
+                  : range === "*" || range === ""
+                    ? dependencyVersion
+                    : range;
+          }
+        }
+
+        fs.writeFileSync(
+          stagedManifestPath,
+          `${JSON.stringify(stagedManifest, null, 2)}\n`,
+        );
         await runCommand(
           "npm",
           ["pack", stagedPackage, "--pack-destination", stagingRoot, "--ignore-scripts"],
