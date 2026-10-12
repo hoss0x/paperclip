@@ -418,6 +418,9 @@ async function executeNativeCodexRunnerInContext(
         detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
       exit = waitForExit(child);
     }
+    // A bounded worker can fail while durable spawn recording is pending.
+    // Observe its rejection immediately; the later exit await still reports it.
+    void exit.catch(() => {});
     child.stdout?.on("data", (chunk: Buffer) => { void input.onLog("stdout", chunk.toString("utf8")); });
     child.stderr?.on("data", (chunk: Buffer) => { void input.onLog("stderr", chunk.toString("utf8")); });
     if (!child.pid) throw new Error("paperclip_runner_process_not_started");

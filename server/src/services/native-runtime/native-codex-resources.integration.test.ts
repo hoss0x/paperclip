@@ -40,7 +40,7 @@ fs.writeFileSync(process.env.FIXTURE_IDENTITY,JSON.stringify({pid:process.pid,de
 const held=[];setInterval(()=>{if(process.env.FIXTURE_LIMITED==='1')held.push(Buffer.alloc(8*1024*1024,1));},10);
 `, { mode: 0o700 });
     const observations: unknown[] = [];
-    const run = async (signal?: AbortSignal) => {
+    const run = async (signal?: AbortSignal, delaySpawn = false) => {
       await fs.rm(fixture.identity, { force: true });
       const runId = randomUUID();
       let spawned: { pid: number; processGroupId: number | null } | undefined;
@@ -51,7 +51,10 @@ const held=[];setInterval(()=>{if(process.env.FIXTURE_LIMITED==='1')held.push(Bu
         completionContract: { revision: "1", criterionIds: [] }, timeoutMs: 10000,
         signal, environment: { FIXTURE_IDENTITY: fixture.identity, FIXTURE_LITERAL: '$HOME "literal"', FIXTURE_LIMITED: fixture.limited ? "1" : "0" },
         runnerBinary: binary, runtimeRoot: path.join(scratch, "native-fixture-state"),
-        onLog: async () => {}, onSpawn: async meta => { spawned = meta; },
+        onLog: async () => {}, onSpawn: async meta => {
+          spawned = meta;
+          if (delaySpawn) await new Promise(resolve => setTimeout(resolve, 3_000));
+        },
       });
       try { return await execution; }
       finally {
@@ -75,12 +78,12 @@ const held=[];setInterval(()=>{if(process.env.FIXTURE_LIMITED==='1')held.push(Bu
     };
     expect(await run()).toMatchObject({ exitCode: 0, sessionDisplayId: "preserved-session" });
     fixture.limited = true;
-    try { await expect(run()).rejects.toMatchObject({ code: "execution_resource_limit" }); }
+    try { await expect(run(undefined, true)).rejects.toMatchObject({ code: "execution_resource_limit" }); }
     finally { fixture.limited = false; }
     expect(await run()).toMatchObject({ exitCode: 0 });
     await withHostExecutionResources(undefined, async () => {
       const resources = currentExecutionResources()!;
-      const release = await resources.admission.acquire(resources.policy.memoryMaxBytes);
+      const release = await resources.admission.acquire(resources.policy.capacityBytes);
       const cancellation = new AbortController();
       const timer = setTimeout(() => cancellation.abort(), 50);
       try { await expect(run(cancellation.signal)).rejects.toThrow("cancelled while queued"); }
