@@ -14,7 +14,8 @@ export async function testEnvironment(ctx: AdapterEnvironmentTestContext): Promi
     const env = parseObject(ctx.config.env) as Record<string, string>;
     await ensureCommandResolvable(command, cwd, ensurePathInEnv({ ...process.env, ...env }));
     const proc = await runChildProcess(randomUUID(), command, ["--help"], { cwd, env, timeoutSec: 10, graceSec: 1, onLog: async () => {} });
-    if (proc.exitCode !== 0 || !proc.stdout.includes("--input-format") || !proc.stdout.includes("--conversation")) throw new Error(proc.stderr || "The executable does not advertise the required Antigravity CLI interface");
+    const helpText = `${proc.stdout}\n${proc.stderr}`;
+    if (proc.exitCode !== 0 || !helpText.includes("--input-format") || !helpText.includes("--conversation")) throw new Error(helpText.trim() || "The executable does not advertise the required Antigravity CLI interface");
     checks.push({ code: "antigravity_cli_available", level: "info", message: "Antigravity headless CLI and conversation resume are available" });
     const models = await runChildProcess(randomUUID(), command, ["models"], { cwd, env, timeoutSec: 10, graceSec: 1, onLog: async () => {} });
     if (models.exitCode !== 0 || !parseModels(models.stdout).length) checks.push({ code: "antigravity_account_unverified", level: "warn", message: "Could not discover account models", detail: models.stderr || models.stdout, hint: "Run agy interactively as the Paperclip OS user, sign in, then retry agy models." });
