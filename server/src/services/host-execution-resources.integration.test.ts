@@ -43,6 +43,23 @@ async function context() {
     admission: new ExecutionResourceAdmission(policy.capacityBytes, 1, 1) };
 }
 (enabled ? describe : describe.skip)("host helper admission", () => {
+  it("honors a helper cancellation signal inside an active run without cancelling its parent", async () => {
+    const resources = await context();
+    const parent = new AbortController();
+    const helper = new AbortController();
+    const release = await resources.admission.acquire(resources.policy.capacityBytes);
+    const timer = setTimeout(() => helper.abort(), 125);
+    try {
+      const started = Date.now();
+      await withExecutionResourceContext({ ...resources, signal: parent.signal }, () =>
+        expect(withHostExecutionResources(helper.signal, () => execFileWithResources(process.execPath,
+          ["-e", "setInterval(()=>{},1000)"], { timeout: 1_500 }))).rejects.toMatchObject({ code: "ABORT_ERR" }));
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(parent.signal.aborted).toBe(false);
+      expect(resources.admission.snapshot.queued).toBe(0);
+    } finally { clearTimeout(timer); release(); }
+    expect(resources.admission.snapshot).toEqual({ usedBytes: 0, active: 0, queued: 0 });
+  }, 15_000);
   it.each([2, 4])("admits a dependent helper under defaults for a %i GiB host", async (hostGiB) => {
     const policy = resolveExecutionResourcePolicy({}, "linux", hostGiB * 1024 ** 3);
     const slice = await ensureSystemdExecutionSlice(policy, `paperclip-smallhelper${randomUUID().replaceAll("-", "")}.slice`);

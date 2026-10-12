@@ -11,7 +11,9 @@ import { logger } from "../middleware/logger.js";
  */
 export async function withHostExecutionResources<T>(signal: AbortSignal | undefined, execute: () => Promise<T>, runId?: string): Promise<T> {
   const existing = currentExecutionResources();
-  if (existing) return withExecutionResourceContext({ ...existing, admissionKind: "helper" }, execute);
+  if (existing) return withExecutionResourceContext({ ...existing, admissionKind: "helper",
+    signal: signal && existing.signal ? AbortSignal.any([signal, existing.signal]) : signal ?? existing.signal,
+  }, execute);
   if (resolveExecutionResourcePolicy().isolation === "none") return execute();
   const root = path.join(resolvePaperclipInstanceRoot(), "runtime", "execution-helpers");
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
