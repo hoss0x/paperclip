@@ -102,7 +102,7 @@ describe.skipIf(!enabled)("workspace runtime physical resource ownership", () =>
     warning.mockRestore();
     const durable = await fs.readFile(resolveLocalServiceLogPath(record!.serviceKey), "utf8");
     expect(durable).toContain("execution_resource_limit");
-    expect(durable).toContain('"peakMemoryBytes":134217728');
+    expect(durable).toContain(`"peakMemoryBytes":${memory.executionResources.peakMemoryBytes}`);
     const later = await start("recovery"); expect((await fetch(later.service.url!)).ok).toBe(true);
     // A registry descriptor for another owner cannot cancel a healthy successor.
     const [next] = (await listLocalServiceRegistryRecords()).filter(record => record.runtimeServiceId === later.service.id);
