@@ -29,7 +29,7 @@ export async function executeWorkspaceRuntimeCommand(input: {
         await resources.onEvidence?.(evidence);
       } }, async () => {
         const worker = await launchResourceStdioProcess({ runId: resources.runId ?? `workspace-${randomUUID()}`,
-          ...input, env: input.env ?? process.env, scope: true, allowEarlyExit: true,
+          ...input, env: input.env ?? process.env, signal: deadline.signal, scope: true, allowEarlyExit: true,
           nativeLoaderCommand: resources.nativeLoaderCommand?.() });
         worker.child.stdout.on("data", chunk => output.stdout(String(chunk)));
         worker.child.stderr.on("data", chunk => output.stderr(String(chunk)));
@@ -40,5 +40,10 @@ export async function executeWorkspaceRuntimeCommand(input: {
         return result.code;
       });
     });
+  } catch (error) {
+    if (deadline.signal.aborted && (error as NodeJS.ErrnoException).code !== "execution_resource_limit") {
+      throw Object.assign(new Error("Workspace command exceeded its preparation deadline", { cause: error }), { code: "ETIMEDOUT" });
+    }
+    throw error;
   } finally { clearTimeout(timer); }
 }

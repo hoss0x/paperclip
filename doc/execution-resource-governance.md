@@ -741,3 +741,30 @@ The original 512 MiB preview default was below the already-measured 869.8 MiB
 packaged server/database peak. Preview defaults therefore use the full agent
 budget. This reserve and the small-host three-budget split still need final guest
 qualification; neither establishes 1 GiB support or a full-development minimum.
+
+### Preparation deadlines inside active runs (2026-10-12)
+
+Preparation now passes its deadline signal directly to the shared launcher.
+The host helper wrapper preserves an existing run context, so the preparation
+signal must also reach admission and the running unit. Queue timeout reports
+`ETIMEDOUT`, and cleanup finishes before the error returns.
+
+Two real systemd regressions shorten only the preparation timer. They cover a
+running command and exhausted aggregate capacity inside an existing run. Both
+finish at the preparation deadline, leave the parent run signal intact, release
+all reservations, and allow a later command. The unchanged baseline fails both
+cases at the independent parent cancellation deadline. Scratch import-resolution
+failures were discarded before this comparison.
+
+### Native failure during spawn recording (2026-10-12)
+
+The older exported native runner now observes its exit promise immediately.
+A worker can exceed its memory limit while durable spawn recording is pending;
+that rejection must not become an unhandled controller error. The later exit
+await still returns `execution_resource_limit`.
+
+The real native fixture delays spawn recording for three seconds. The baseline
+produces an unhandled resource-limit rejection. The fixed runner passes the same
+case, preserves worker identity and session data, removes descendants, and runs
+a later session. Queued cancellation now deliberately reserves the full aggregate
+capacity; holding only an agent slot does not exhaust the separate helper lane.

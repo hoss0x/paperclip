@@ -11,6 +11,10 @@ import { executeWorkspaceRuntimeCommand } from "../services/workspace-runtime-co
 import { logger } from "../middleware/logger.js";
 import { listActiveExecutionUnits } from "@paperclipai/adapter-utils/execution-resource-reconciliation";
 
+import { withExecutionResourceContext } from "@paperclipai/adapter-utils/execution-resource-context";
+import { ExecutionResourceAdmission, resolveExecutionResourcePolicy } from "@paperclipai/adapter-utils/execution-resource-policy";
+import { ensureSystemdExecutionSlice } from "@paperclipai/adapter-utils/systemd-execution-slice";
+
 const exec = promisify(execFile);
 const enabled = process.platform === "linux" && process.env.PAPERCLIP_TEST_SYSTEMD === "1";
 describe.skipIf(!enabled)("workspace runtime physical resource ownership", () => {
@@ -149,4 +153,37 @@ describe.skipIf(!enabled)("workspace runtime physical resource ownership", () =>
     expect(code).toBe(0); expect(stdout).toContain("paperclip-execution-");
     expect(stdout).not.toBe(await fs.readFile("/proc/self/cgroup", "utf8")); expect(stderr).toBe("exact-stderr");
   }, 120_000);
+  it.each([false, true])("enforces the preparation deadline inside an existing run (queued=%s)", async queued => {
+    const policy = resolveExecutionResourcePolicy({ PAPERCLIP_EXECUTION_MEMORY_MAX_MIB: "96",
+      PAPERCLIP_EXECUTION_MEMORY_HIGH_MIB: "96", PAPERCLIP_EXECUTION_CAPACITY_MIB: "192" }, "linux", 8 * 1024 ** 3);
+    const slice = await ensureSystemdExecutionSlice(policy, `paperclip-deadline${randomUUID().replaceAll("-", "")}.slice`);
+    const admission = new ExecutionResourceAdmission(policy.capacityBytes, 1, 1);
+    const parent = new AbortController();
+    const originalTimeout = globalThis.setTimeout;
+    const fallback = originalTimeout(() => parent.abort(), 10_000);
+    const release = queued ? await admission.acquire(policy.capacityBytes) : () => {};
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback, ms, ...args) =>
+      originalTimeout(callback, ms === 30 * 60_000 ? 3_000 : ms, ...args)) as typeof setTimeout);
+    try {
+      await withExecutionResourceContext({ runId: randomUUID(), policy, slice, admission,
+        signal: parent.signal, scratchDir: process.env.PAPERCLIP_SCRATCH_DIR!,
+        nativeLoaderCommand: () => process.env.PAPERCLIP_TEST_RESOURCE_LOADER! }, async () => {
+        const started = Date.now();
+        await expect(executeWorkspaceRuntimeCommand({ command: process.execPath,
+          args: ["-e", "setInterval(()=>{},1000)"], cwd: directory },
+          { stdout: () => {}, stderr: () => {} })).rejects.toMatchObject({ code: "ETIMEDOUT" });
+        expect(Date.now() - started).toBeLessThan(8_000);
+        expect(parent.signal.aborted).toBe(false);
+        release();
+        expect(admission.snapshot).toEqual({ usedBytes: 0, active: 0, queued: 0 });
+        expect(await executeWorkspaceRuntimeCommand({ command: "/bin/true", args: [], cwd: directory },
+          { stdout: () => {}, stderr: () => {} })).toBe(0);
+      });
+    } finally {
+      parent.abort(); release(); clearTimeout(fallback); vi.restoreAllMocks();
+      await exec("systemctl", ["--user", "stop", slice]);
+      await exec("systemctl", ["--user", "revert", slice]);
+    }
+  }, 30_000);
+
 });
