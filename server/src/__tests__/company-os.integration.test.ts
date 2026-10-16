@@ -122,6 +122,24 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     await dispatchOrganizationDeliveries(db, wake); expect(wake).toHaveBeenCalledTimes(1);
     expect((await db.select().from(organizationDeliveries).where(eq(organizationDeliveries.id, delivery.id)))[0].status).toBe("cancelled");
   });
+  it("supplies the triggering event for issue-free company-wide wakes and rejects other tenants", async () => {
+    await svc.saveContract(c, b, contract(["context.created"]), 0, board);
+    const event = await svc.appendEvent(c, { kind: "context.created", subject: "Shared policy changed", summary: "Use the new service window", missionId: null, projectId: null, entityIds: [], causationId: null, correlationId: null, metadata: {} }, board);
+    let context: Record<string, unknown> = {};
+    const wake = vi.fn(async (agentId: string, options: { contextSnapshot: Record<string, unknown> }) => {
+      context = options.contextSnapshot;
+      return run(agentId, context);
+    });
+    await dispatchOrganizationDeliveries(db, wake);
+    expect(wake).toHaveBeenCalledTimes(1);
+    const r = await run(b, context);
+    const pack = await compileOrganizationContext(db, r, context);
+    expect(pack?.pack).toMatchObject({ wakeEvent: { id: event.id, kind: "context.created", summary: "Use the new service window" }, mission: null, receipt: null });
+    expect(context.issueId).toBeUndefined();
+    const foreign = await svc.appendEvent(other, { kind: "context.created", subject: "Private", summary: "Other tenant policy", missionId: null, projectId: null, entityIds: [], causationId: null, correlationId: null, metadata: {} }, board);
+    const denied = await run(b, { organizationEventId: foreign.id });
+    await expect(compileOrganizationContext(db, denied, denied.contextSnapshot!)).rejects.toMatchObject({ status: 403 });
+  });
   it("keeps superseded structural truth and causal incident history", async () => {
     const m = await mission();
     const first = await svc.saveKnowledge(c, null, knowledge("A", m.id), 0, board);

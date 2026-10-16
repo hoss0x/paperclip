@@ -67,7 +67,8 @@ wakes receive a fresh interaction session and do not require task checkout.
 Traditional task wakes retain the existing task workflow.
 
 Before execution, the context compiler loads the current contract, employee and
-company goals, the mission, owned workstreams, incoming receipt, scoped knowledge,
+company goals, the triggering event (including company-wide events without a
+mission), the mission, owned workstreams, incoming receipt, scoped knowledge,
 recent events and project work products. Existing instruction files remain in
 the adapter prompt. Context packs persist the contract version and exact input.
 Successful runs advance mission cursors; failed runs preserve unconsumed deltas.
@@ -118,9 +119,10 @@ pnpm exec playwright test --config tests/e2e/playwright-company-os.config.ts
 For the live variant, first pass the deterministic tests. Set
 `PAPERCLIP_COMPANY_OS_LIVE=1` and `PAPERCLIP_COMPANY_OS_MODEL` to a model returned
 by the configured Antigravity account. The live test subscribes the specialist
-and owner, then waits for a finding, correlated reply, automatic return wake,
-acknowledgement and successful runs. It checks both persisted context packs and
-unchanged work ownership. It writes `live-receipt-evidence.json` and a timeline
+and owner. Starting the mission wakes the owner, which requests the specialist
+by capability. The test waits for a finding, correlated reply, automatic return
+wake, acknowledgement and all three successful runs. It checks the mission-start
+and receipt context packs, the returned knowledge and unchanged work ownership. It writes `live-receipt-evidence.json` and a timeline
 screenshot under the Playwright output directory.
 
 The harness always uses a temporary instance home and a separate port. If
@@ -128,3 +130,9 @@ The harness always uses a temporary instance home and a separate port. If
 Never supply the production connection. `PAPERCLIP_E2E_LOW_PROCESS=1` reduces
 Chromium worker processes for constrained hosts. Run build, typecheck and browser
 checks sequentially when the agent execution has a small thread budget.
+
+When running workspace provisioning tests inside an agent shell, remove the
+agent-specific `BASH_ENV` startup hook from the test process. That hook can add
+the installed CLI to fixtures that intentionally restrict `PATH`, causing them
+to use a real CLI instead of their isolated fallback. This is test-process
+isolation; it does not change the instance or VPS settings.

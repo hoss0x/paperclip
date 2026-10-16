@@ -48,12 +48,13 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
     await page.getByLabel("Employee", { exact: true }).selectOption(owner.id);
     await page.getByRole("button", { name: "Edit contract", exact: true }).click();
     await page.getByLabel("Purpose", { exact: true }).fill("Own the recommendation and consume specialist results");
+    await page.getByLabel("mission.started", { exact: true }).check();
     await page.getByLabel("receipt.response_received", { exact: true }).check();
-    await page.getByLabel("Runtime instructions", { exact: true }).fill("When a result receipt arrives, verify its result and the mission context. POST /receipts/<incoming id>/acknowledge using the Organizational API and environment credentials, then exit. Do not send another receipt and do not create any tasks.");
+    await page.getByLabel("Runtime instructions", { exact: true }).fill("For wakeReason mission.started, use the Organizational API and environment credentials to POST exactly one investigation_request receipt: missionId=current mission id, senderAgentId=your employee id, capability=research, subject=Investigate the evidence, payload={content: Return one verified fact.}, idempotencyKey=smoke-request- followed by the mission id. Do not include recipientAgentId when using capability. For receipt.response_received, verify the result and mission context, POST /receipts/<incoming id>/acknowledge, then exit. Do not send another receipt in response to a result. Never create any tasks.");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Current contract: version 1", { exact: true })).toBeVisible();
     for (const employee of [owner, specialist]) {
-      const updated = await request.patch(`/api/agents/${employee.id}`, { data: { adapterConfig: { ...employee.adapterConfig, model: process.env.PAPERCLIP_COMPANY_OS_MODEL, dangerouslySkipPermissions: true, timeoutSec: 120, promptTemplate: "Process the supplied employee organizational context. Complete only this receipt interaction using its API and exit.", desiredSkills: [] } } });
+      const updated = await request.patch(`/api/agents/${employee.id}`, { data: { adapterConfig: { ...employee.adapterConfig, model: process.env.PAPERCLIP_COMPANY_OS_MODEL, dangerouslySkipPermissions: true, timeoutSec: 120, promptTemplate: "Process the supplied organizational wake event using the employee contract and mission. Complete this interaction using its API and exit.", desiredSkills: [] } } });
       expect(updated.ok(), await updated.text()).toBe(true);
     }
   }
@@ -74,15 +75,23 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
   await page.getByRole("textbox", { name: "Owned resource", exact: true }).fill("recommendation");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Recommendation ownership · planned", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Receipts", exact: true }).click();
-  await page.getByRole("button", { name: "Send receipt", exact: true }).click();
-  await page.getByLabel("From", { exact: true }).selectOption(owner.id);
-  await page.getByLabel("To", { exact: true }).selectOption(specialist.id);
-  await page.getByLabel("Subject", { exact: true }).fill("Investigate the evidence");
-  await page.getByLabel("Request / response", { exact: true }).fill("Return one verified fact.");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Investigate the evidence · sent", { exact: true })).toBeVisible();
-  const receipts = await (await request.get(`${base}/receipts`)).json(); expect(receipts).toHaveLength(1);
+  if (live) {
+    await page.getByRole("button", { name: "Edit mission", exact: true }).click();
+    await page.getByLabel("Status", { exact: true }).selectOption("active");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("active · Version 2", { exact: true })).toBeVisible();
+    await page.getByRole("tab", { name: "Receipts", exact: true }).click();
+  } else {
+    await page.getByRole("tab", { name: "Receipts", exact: true }).click();
+    await page.getByRole("button", { name: "Send receipt", exact: true }).click();
+    await page.getByLabel("From", { exact: true }).selectOption(owner.id);
+    await page.getByLabel("To", { exact: true }).selectOption(specialist.id);
+    await page.getByLabel("Subject", { exact: true }).fill("Investigate the evidence");
+    await page.getByLabel("Request / response", { exact: true }).fill("Return one verified fact.");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("Investigate the evidence · sent", { exact: true })).toBeVisible();
+    const receipts = await (await request.get(`${base}/receipts`)).json(); expect(receipts).toHaveLength(1);
+  }
   if (live) {
     await expect.poll(async () => (await (await request.get(`${base}/receipts`)).json()).length, { timeout: 240000, intervals: [2000, 5000] }).toBe(2);
     await expect.poll(async () => (await (await request.get(`${base}/receipts`)).json()).find((r: { parentReceiptId: string | null }) => r.parentReceiptId)?.status, { timeout: 120000, intervals: [2000, 5000] }).toBe("acknowledged");
@@ -93,12 +102,12 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
     const runsUrl = `/api/companies/${company.id}/heartbeat-runs`;
     await expect.poll(async () => {
       const runs = await (await request.get(runsUrl)).json();
-      return [owner, specialist].every(employee => runs.some((run: { agentId: string; status: string }) => run.agentId === employee.id && run.status === "succeeded"));
+      return runs.filter((run: { agentId: string; status: string }) => run.agentId === owner.id && run.status === "succeeded").length === 2 && runs.some((run: { agentId: string; status: string }) => run.agentId === specialist.id && run.status === "succeeded");
     }, { timeout: 120000, intervals: [2000, 5000] }).toBe(true);
     const runs = await (await request.get(runsUrl)).json();
-    const packs = [];
+    const packs: Array<Record<string, unknown>> = [];
     for (const employee of [owner, specialist]) {
-      const run = runs.find((r: { agentId: string; status: string }) => r.agentId === employee.id && r.status === "succeeded");
+      const run = runs.find((r: { agentId: string; status: string; contextSnapshot: { wakeReason: string } }) => r.agentId === employee.id && r.status === "succeeded" && r.contextSnapshot.wakeReason === (employee.id === owner.id ? "receipt.response_received" : "receipt.received"));
       const response = await request.get(`${base}/context-packs/${run.id}`);
       expect(response.ok()).toBe(true);
       const pack = await response.json();
@@ -106,8 +115,17 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
       expect(pack.pack.mission.id).toBe(roundTrip[0].missionId);
       expect(pack.pack.receipt.recipientAgentId).toBe(employee.id);
       expect(pack.pack.wakeReason).toBe(employee.id === owner.id ? "receipt.response_received" : "receipt.received");
-      packs.push({ runId: run.id, employeeId: employee.id, status: run.status, packId: pack.id, missionId: pack.missionId, contractVersion: pack.contractVersion, wakeReason: pack.pack.wakeReason, receiptId: pack.pack.receipt.id });
+      if (employee.id === owner.id) {
+        expect(pack.pack.knowledge.some((entity: { name: string }) => entity.name === "Verified smoke fact")).toBe(true);
+      }
+      packs.push({ runId: run.id, employeeId: employee.id, status: run.status, packId: pack.id, missionId: pack.missionId, contractVersion: pack.contractVersion, wakeReason: pack.pack.wakeReason, receiptId: pack.pack.receipt.id, previousContextAt: pack.pack.previousContextAt });
     }
+    const initiationRun = runs.find((run: { agentId: string; contextSnapshot: { wakeReason: string } }) => run.agentId === owner.id && run.contextSnapshot.wakeReason === "mission.started");
+    expect(initiationRun).toBeTruthy();
+    const initiation = await (await request.get(`${base}/context-packs/${initiationRun.id}`)).json();
+    expect(initiation.pack.receipt).toBeNull();
+    expect(initiation.pack.workstreams[0].title).toBe("Recommendation ownership");
+    packs.push({ runId: initiationRun.id, employeeId: owner.id, status: initiationRun.status, packId: initiation.id, missionId: initiation.missionId, contractVersion: initiation.contractVersion, wakeReason: initiation.pack.wakeReason, receiptId: null });
     const streams = await (await request.get(`${base}/missions/${roundTrip[0].missionId}/workstreams`)).json();
     expect(streams[0].data.ownerAgentId).toBe(owner.id);
     const events = await (await request.get(`${base}/events?missionId=${roundTrip[0].missionId}`)).json();
