@@ -1934,3 +1934,27 @@ UI conventions, custom adapter integration, and initial memory templates.
   path in `avatarUrl`; fallback responses retain their generated avatar URL.
 - Uploaded and generated avatars share circular geometry across agent identity
   surfaces and organization chart nodes.
+
+### Company OS foundation
+
+The company-scoped organization API adds immutable employee contract revisions,
+missions, workstreams, receipts, temporal knowledge and append-only context events.
+Goals, employee identity, reporting relationships and accountable tasks retain
+their existing models. Contracts are board-editable configuration; role names do
+not select runtime behavior.
+
+Organizational delivery uses the existing heartbeat/wakeup/adapter engine.
+Explicit contract subscriptions gate event wakes. Receipt requests and replies do
+not require task creation or checkout. The sender retains work ownership.
+Domain mutations, audit entries, causal events and delivery intents commit in one
+transaction. Pauses, budgets and existing execution gates still apply.
+
+Each run receives an immutable, bounded context pack with the contract revision,
+mission, receipt, ownership, relevant knowledge and recent changes. Successful
+runs advance mission context cursors; failed runs preserve unconsumed changes.
+Company boundaries apply to all reads and referenced identifiers. Active
+workstreams with overlapping ownership are rejected with a conflict.
+
+The Company OS sidebar page exposes contracts, missions, ownership, receipts,
+knowledge, causal history and run context. See [Company OS](company-os.md) for API,
+operator workflow, deployment and initial limits.

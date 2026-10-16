@@ -158,6 +158,17 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     expect((await compileOrganizationContext(db, later, later.contextSnapshot!))?.id).toBe(delta!.id);
     await expect(svc.getPack(other, later.id)).rejects.toMatchObject({ status: 404 });
   });
+  it("bounds oversized context and acknowledges only events actually included", async () => {
+    await svc.saveContract(c, b, { ...contract(), purpose: "x".repeat(20000) }, 0, board);
+    const m = await svc.saveMission(c, null, { ...missionInput(), objective: "x".repeat(20000) }, 0, board);
+    for (let n = 0; n < 6; n++) await svc.saveWorkstream(c, m.id, null, workstreamSchema.parse({ title: "Large boundary set", objective: "Bound context", ownerAgentId: b, participantAgentIds: [], status: "planned", dependencyIds: [], acceptanceCriteria: [], constraints: [], executionWorkspaceId: null, boundaries: Array.from({ length: 20 }, (_, i) => ({ kind: "service", resource: String(i).padEnd(500, "x") })) }), 0, board);
+    for (let i = 0; i < 15; i++) await svc.appendEvent(c, { kind: "context.created", subject: "Large event", summary: "x".repeat(20000), missionId: m.id, projectId: null, entityIds: [], causationId: null, correlationId: null, metadata: {} }, board);
+    const r = await run(b, { organizationMissionId: m.id });
+    const pack = await compileOrganizationContext(db, r, r.contextSnapshot!);
+    expect(JSON.stringify(pack!.pack).length).toBeLessThanOrEqual(100000);
+    expect(pack!.eventIds).toEqual((pack!.pack.changes as { id: string }[]).map(e => e.id));
+    expect(pack!.pack).toMatchObject({ contract: { version: 1 }, mission: { id: m.id } });
+  });
   it("detects generic and nested path conflicts without sibling-prefix false positives", () => {
     expect(boundariesOverlap({ kind: "path", resource: "src/auth" }, { kind: "path", resource: "src/auth/api" })).toBe(true);
     expect(boundariesOverlap({ kind: "path", resource: "src/auth" }, { kind: "path", resource: "src/authors" })).toBe(false);

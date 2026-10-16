@@ -52,16 +52,22 @@ export async function compileOrganizationContext(db: Db, run: typeof heartbeatRu
     goals: employeeGoals.map(g => ({ id: g.id, title: g.title, description: preview(g.description ?? "", 1000), level: g.level })),
     mission: mission ? { id: mission.id, version: mission.version, ...mission.data, roadmap: preview(mission.data.roadmap, 4000), objective: preview(mission.data.objective), summary: preview(mission.data.summary) } : null,
     workstreams: workstreams.slice(0, 10).map(w => ({ id: w.id, version: w.version, title: w.data.title, status: w.data.status, objective: preview(w.data.objective), boundaries: w.data.boundaries, constraints: w.data.constraints })),
-    receipt: receipt ?? null,
+    receipt: receipt ? { id: receipt.id, missionId: receipt.missionId, projectId: receipt.projectId, senderAgentId: receipt.senderAgentId, recipientAgentId: receipt.recipientAgentId, kind: receipt.kind, subject: receipt.subject, payload: receipt.payload, status: receipt.status, correlationId: receipt.correlationId, parentReceiptId: receipt.parentReceiptId } : null,
     knowledge: entities.map(e => ({ id: e.id, kind: e.data.kind, name: e.data.name, summary: preview(e.data.summary, 1000), provenance: preview(e.data.provenance, 500), version: e.version })),
-    relationships, changes: changes.map(e => ({ id: e.id, kind: e.kind, subject: e.subject, summary: preview(e.summary, 1000), causationId: e.causationId, correlationId: e.correlationId, createdAt: e.createdAt })),
+    relationships: relationships.map(r => ({ id: r.id, sourceId: r.sourceId, targetId: r.targetId, kind: r.kind, provenance: preview(r.provenance, 500), validFrom: r.validFrom })), changes: changes.map(e => ({ id: e.id, kind: e.kind, subject: e.subject, summary: preview(e.summary, 1000), causationId: e.causationId, correlationId: e.correlationId, createdAt: e.createdAt })),
     workProducts, previousContextAt: cursor?.updatedAt ?? null,
     limits: { recentEvents: 30, knowledgeEntities: 20, relationships: 30, workstreams: 10, workProducts: 5, note: "Bounded context. Fetch full records or older history through the company-scoped API when needed." },
   };
-  while (JSON.stringify(pack).length > 100000 && (pack.knowledge as unknown[]).length) (pack.knowledge as unknown[]).pop();
+  // Bound the whole pack, including user-controlled arrays and relationship metadata.
+  // Keep contract, mission and incoming receipt; callers can fetch omitted records.
+  for (const section of ["knowledge", "relationships", "workProducts", "workstreams", "changes", "goals"] as const) {
+    const entries = pack[section] as unknown[];
+    while (JSON.stringify(pack).length > 100000 && entries.length) entries.pop();
+  }
   const includedIds = new Set((pack.knowledge as { id: string }[]).map(e => e.id));
-  pack.relationships = relationships.filter(r => includedIds.has(r.sourceId) && includedIds.has(r.targetId));
-  const [saved] = await db.insert(organizationContextPacks).values({ companyId: run.companyId, agentId: run.agentId, runId: run.id, missionId, contractVersion: contract?.version ?? null, pack, eventIds: events.map(e => e.id) }).onConflictDoNothing().returning();
+  pack.relationships = (pack.relationships as { sourceId: string; targetId: string }[]).filter(r => includedIds.has(r.sourceId) && includedIds.has(r.targetId));
+  const includedEventIds = (pack.changes as { id: string }[]).map(e => e.id);
+  const [saved] = await db.insert(organizationContextPacks).values({ companyId: run.companyId, agentId: run.agentId, runId: run.id, missionId, contractVersion: contract?.version ?? null, pack, eventIds: includedEventIds }).onConflictDoNothing().returning();
   if (saved) return saved;
   return svc.getPack(run.companyId, run.id);
 }
