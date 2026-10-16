@@ -1858,6 +1858,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     expect(parentWorkspace?.status).toBe("active");
   });
 
+  // Four real Git worktrees plus cleanup need headroom under instrumented Git.
   it("reaps only fully-terminal delivered workspaces without active checkout runs", async () => {
     const eligible = await seedTerminalWorkspace({ mergedPr: true, childStatus: "done" });
     const activeRun = await seedTerminalWorkspace({ mergedPr: true, activeRun: true });
@@ -1902,7 +1903,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       .where(eq(activityLog.entityId, eligible.executionWorkspaceId));
     expect(reopenedWorkspace?.status).toBe("archived");
     expect(reopenActivities).toContainEqual({ action: "execution_workspace.source_issue_reopened" });
-  }, 20_000);
+  }, 60_000);
 
   it("allows archiving shared workspace sessions with warnings even when issues are still open", async () => {
     const companyId = randomUUID();
@@ -3670,6 +3671,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const issueId = randomUUID();
     const executionWorkspaceId = randomUUID();
     const runtimeStartedMarker = path.join(os.tmpdir(), `paperclip-runtime-started-${randomUUID()}.marker`);
+    const runtimeReadyMarker = path.join(os.tmpdir(), `paperclip-runtime-ready-${randomUUID()}.marker`);
 
     await db.insert(companies).values({
       id: companyId,
@@ -3709,11 +3711,13 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
 
     const serverScript = [
       `require("node:fs").writeFileSync(${JSON.stringify(runtimeStartedMarker)}, "started");`,
-      "setTimeout(() => {",
+      "const readinessGate = setInterval(() => {",
+      `  if (!require("node:fs").existsSync(${JSON.stringify(runtimeReadyMarker)})) return;`,
+      "  clearInterval(readinessGate);",
       "  require(\"node:http\")",
       "    .createServer((_req, res) => { res.end(\"ok\"); })",
       "    .listen(Number(process.env.PORT), \"127.0.0.1\");",
-      "}, 600);",
+      "}, 25);",
       "setInterval(() => {}, 1000);",
     ].join(" ");
     const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(serverScript)}`;
@@ -3794,8 +3798,12 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         (error) => error,
       );
 
+      // Keep the service in starting until reconciliation has captured its state.
+      // Git inspection can take longer than a fixed readiness delay on busy hosts.
+      const reconcileError = await reconcileErrorPromise;
+      await fs.writeFile(runtimeReadyMarker, "ready");
       startedServices = await startPromise;
-      await expect(reconcileErrorPromise).resolves.toMatchObject({
+      expect(reconcileError).toMatchObject({
         status: 422,
         message: "Execution workspace branch reconciliation requires all runtime services to be stopped",
         details: {
@@ -3820,6 +3828,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         workspaceCwd: worktreePath,
       });
       await fs.rm(runtimeStartedMarker, { force: true });
+      await fs.rm(runtimeReadyMarker, { force: true });
     }
 
     const [workspace] = await db
