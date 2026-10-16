@@ -1,3 +1,4 @@
+import { compileOrganizationContext, renderOrganizationContext } from "./company-os-runtime.js";
 import { executeWithResourceGovernance, cancelQueuedResourceExecution, ExecutionResourceLimitError, stopRecordedLegacyExecutionUnits, resourceSafeAdapterEventType } from "./execution-resources.js";
 import { retryIdempotentDatabaseOperation } from "../database-retry.js";
 import { prepareConnectionInstructionDelivery } from "./connection-instructions.js";
@@ -20574,6 +20575,12 @@ export function heartbeatService(
       }
       const runtime = await ensureRuntimeState(agent);
       const context = parseObject(run.contextSnapshot);
+      const organizationPack = await compileOrganizationContext(db, run, context);
+      if (organizationPack) {
+        context.organizationContextPackId = organizationPack.id;
+        context.organizationContextMarkdown = renderOrganizationContext(organizationPack, Boolean(context.issueId));
+      }
+
       const authorizeFailedChatRetryExecution = () =>
         db.transaction((tx) =>
           authorizeFailedChatRunRetryWake(db, tx as unknown as Db, {
@@ -24099,6 +24106,7 @@ export function heartbeatService(
                     runId: run.id,
                     issue: nativeReviewRequest ? { ...issueRef, title: `Review: ${issueRef.title}`, description: nativeReviewRequest } : issueRef,
                     taskPrompt: [
+                      readNonEmptyString(context.organizationContextMarkdown),
                       nativeReviewRequest ?? readNonEmptyString(
                         selectPaperclipTaskMarkdown(context, {
                           resumedSession: false,

@@ -1,3 +1,4 @@
+import { dispatchOrganizationDeliveries, settleOrganizationRuns, scheduleOrganizationReviews } from "./services/company-os-runtime.js";
 import { subscribeAllCompanyLiveEvents } from "./services/live-events.js";
 import { chatCompletionDeliveryService } from "./services/chat-completion-delivery.js";
 /// <reference path="./types/express.d.ts" />
@@ -1157,6 +1158,9 @@ async function startServerWithDatabaseTeardown(
   };
   const executionControlSweepsInFlight = new Set<string>();
   const executionControlSweeps = [
+    ["organization_delivery", () => heartbeat ? dispatchOrganizationDeliveries(db, heartbeat.wakeup) : undefined],
+    ["organization_settlement", () => settleOrganizationRuns(db)],
+    ["organization_reviews", () => scheduleOrganizationReviews(db)],
     ["finalization", () => reconcileAbandonedExecutionControl(db)],
     ["replacement", () => heartbeat ? reconcileSafeNativeReplacements(db, new Date(), { verifyStoppedSession: run => verifyStoppedNativeSessionForReplacement(db, run) }) : undefined],
     ["reconciliation_delivery", () => heartbeat ? deliverReconciledExecutions(db, heartbeat.wakeup) : undefined],

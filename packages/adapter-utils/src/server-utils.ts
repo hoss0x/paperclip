@@ -2231,7 +2231,7 @@ export function selectPaperclipPromptSections(
     nativeWakeReaderAvailable?: boolean;
   } = {},
 ): { taskContextNote: string; wakePrompt: string } {
-  const taskContextNote = selectPaperclipTaskMarkdown(context, options);
+  const taskContextNote = joinPromptSections([selectPaperclipTaskMarkdown(context, options), asString(context?.organizationContextMarkdown, "")]);
   return {
     taskContextNote,
     wakePrompt: renderPaperclipWakePrompt(context?.paperclipWake, {
