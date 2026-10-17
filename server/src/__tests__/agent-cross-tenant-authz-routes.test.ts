@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.unmock("http");
 vi.unmock("node:http");
@@ -344,6 +344,12 @@ function resetMockDefaults() {
 }
 
 describe.sequential("agent cross-tenant route authorization", () => {
+  // Load the large route graph before the first case's deadline. If that case
+  // times out during import, its loop keeps resetting mocks used by later cases.
+  beforeAll(async () => {
+    await loadRouteModules();
+  }, 120_000);
+
   beforeEach(() => {
     resetMockDefaults();
   });
