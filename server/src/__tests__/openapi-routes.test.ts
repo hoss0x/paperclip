@@ -36,6 +36,7 @@ const apiPrefixes: Record<string, string> = {
   "cloud.ts": "/api/cloud",
   "companies.ts": "/api/companies",
   "company-skills.ts": "/api",
+  "company-os.ts": "/api/companies/{companyId}/organization",
   "company-skill-policy.ts": "/api",
   "connection-intents.ts": "/api",
   "costs.ts": "/api",
@@ -710,6 +711,18 @@ describe("openapi routes", () => {
     expect(
       spec.paths["/api/chat-webhooks/{publicId}/{provider}"],
     ).toBeUndefined();
+  });
+
+  it("documents Company OS contract authority and versioned mutations", () => {
+    const { spec } = loadSpecRoutes();
+    const prefix = "/api/companies/{companyId}/organization";
+    const contract = spec.paths[`${prefix}/contracts/{id}`].put;
+    expect(contract["x-paperclip-authorization"]).toEqual({ actor: "board" });
+    expect(contract.requestBody.content["application/json"].schema.required).toContain("expectedVersion");
+    const mission = spec.paths[`${prefix}/missions/{id}`].put;
+    expect(mission.requestBody.content["application/json"].schema.required).toEqual(["data", "expectedVersion"]);
+    expect(spec.paths[`${prefix}/receipts`].post.responses["201"]).toBeDefined();
+    expect(spec.paths[`${prefix}/receipts/{id}/acknowledge`].post.responses["200"]).toBeDefined();
   });
 
   it("covers the mounted server routes exactly", () => {

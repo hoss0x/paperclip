@@ -20,6 +20,13 @@ import {
   browserUseViewerSchema,
   slackToolCallSchema,
   slackSearchConfigSchema,
+  saveEmployeeContractSchema,
+  missionSchema,
+  workstreamSchema,
+  receiptSchema,
+  contextEventSchema,
+  knowledgeEntitySchema,
+  knowledgeRelationshipSchema,
   // Agent
   AGENT_PALETTE_IDS,
   AGENT_AVATAR_SIZES,
@@ -1351,6 +1358,7 @@ const browserUseOperations = [
 ] as const;
 
 const BOARD_ONLY_OPERATIONS = new Set([
+  "PUT /api/companies/{companyId}/organization/contracts/{id}",
   "POST /api/agents/{agentId}/avatar",
   "DELETE /api/agents/{agentId}/avatar",
   ...browserUseOperations.map(([method, path]) => `${method.toUpperCase()} ${path}`),
@@ -4692,6 +4700,64 @@ registry.registerPath({
   request: { params: z.object({ id: z.string(), workspaceId: z.string() }) },
   responses: { 200: r.ok(), 401: r.unauthorized },
 });
+
+// Company OS reuses the same company access and actor checks as mounted routes.
+const organizationPrefix = "/api/companies/{companyId}/organization";
+const organizationFilterSchema = z.object({
+  missionId: z.string().uuid().optional(),
+  agentId: z.string().uuid().optional(),
+  entityId: z.string().uuid().optional(),
+  correlationId: z.string().uuid().optional(),
+  before: z.iso.datetime().optional(),
+});
+const versionedOrganizationInput = (data: z.ZodTypeAny) =>
+  z.object({ data, expectedVersion: z.number().int().min(0) }).strict();
+const organizationOperations: Array<{
+  method: string;
+  path: string;
+  summary: string;
+  body?: OpenApiSchema;
+  query?: OpenApiSchema;
+}> = [
+  { method: "get", path: "/contracts/{id}", summary: "Get the current employee contract" },
+  { method: "get", path: "/contracts/{id}/history", summary: "List employee contract revisions" },
+  { method: "put", path: "/contracts/{id}", summary: "Save an employee contract revision", body: saveEmployeeContractSchema },
+  { method: "get", path: "/missions", summary: "List company missions" },
+  { method: "get", path: "/missions/{id}", summary: "Get a mission" },
+  { method: "post", path: "/missions", summary: "Create a mission", body: missionSchema },
+  { method: "put", path: "/missions/{id}", summary: "Update a mission", body: versionedOrganizationInput(missionSchema) },
+  { method: "get", path: "/missions/{id}/workstreams", summary: "List mission workstreams and ownership conflicts" },
+  { method: "post", path: "/missions/{id}/workstreams", summary: "Create a mission workstream", body: workstreamSchema },
+  { method: "put", path: "/missions/{missionId}/workstreams/{id}", summary: "Update a mission workstream", body: versionedOrganizationInput(workstreamSchema) },
+  { method: "get", path: "/receipts", summary: "List collaboration receipts", query: organizationFilterSchema },
+  { method: "get", path: "/receipts/{id}", summary: "Get a collaboration receipt" },
+  { method: "post", path: "/receipts", summary: "Send a collaboration receipt", body: receiptSchema },
+  { method: "post", path: "/receipts/{id}/acknowledge", summary: "Acknowledge a collaboration receipt" },
+  { method: "get", path: "/events", summary: "List context events", query: organizationFilterSchema },
+  { method: "post", path: "/events", summary: "Append a context event", body: contextEventSchema },
+  { method: "get", path: "/knowledge", summary: "Search company knowledge", query: z.object({ q: z.string().max(200).optional() }) },
+  { method: "post", path: "/knowledge", summary: "Create a knowledge entity", body: knowledgeEntitySchema },
+  { method: "put", path: "/knowledge/{id}", summary: "Update a knowledge entity", body: versionedOrganizationInput(knowledgeEntitySchema) },
+  { method: "get", path: "/relationships", summary: "List current or historical knowledge relationships", query: z.object({ history: z.enum(["true", "false"]).optional() }) },
+  { method: "post", path: "/relationships", summary: "Create or supersede a knowledge relationship", body: knowledgeRelationshipSchema },
+  { method: "get", path: "/context-packs/{id}", summary: "Inspect a compiled run context pack" },
+];
+for (const operation of organizationOperations) {
+  const created = operation.method === "post" && !operation.path.endsWith("/acknowledge");
+  registerCurrentRoute({
+    ...operation,
+    path: `${organizationPrefix}${operation.path}`,
+    tags: ["organization"],
+    responses: {
+      [created ? 201 : 200]: r.ok(),
+      400: r.badRequest,
+      401: r.unauthorized,
+      403: r.forbidden,
+      404: r.notFound,
+      409: r.conflict,
+    },
+  });
+}
 
 // ─── Routines ────────────────────────────────────────────────────────────────
 
