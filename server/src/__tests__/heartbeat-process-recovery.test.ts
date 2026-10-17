@@ -7628,6 +7628,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     });
     expect(next?.contextSnapshot?.wakeCommentIds).toEqual([pending!.id, go!.id]);
     expect((await db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, deferred!.id)))[0]).toMatchObject({ status: "coalesced", runId: next!.id });
+    await heartbeat.drainActiveRunExecutions();
     await vi.waitFor(async () => expect((await heartbeat.getRun(next!.id))?.status).not.toBe("running"));
   });
 
@@ -7765,6 +7766,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
           .set({ status: "paused" })
           .where(eq(agents.id, agentId));
         release();
+        await heartbeat.drainActiveRunExecutions();
         if (next!)
           await vi.waitFor(async () =>
             expect((await heartbeat.getRun(next!.id))?.status).not.toBe(
