@@ -7487,10 +7487,18 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await db.update(agents).set({ adapterConfig: {
       command: process.execPath, args: ["-e", "console.log('ready');setInterval(() => {}, 1000)"], graceSec: 1,
     } }).where(eq(agents.id, agentId));
-    mockAdapterExecute.mockImplementationOnce((async (input: unknown) =>
-      actualProcess.execute(input as Parameters<typeof actualProcess.execute>[0])) as typeof mockAdapterExecute);
+    let markAdapterDispatched!: () => void;
+    const adapterDispatched = new Promise<void>((resolve) => {
+      markAdapterDispatched = resolve;
+    });
+    mockAdapterExecute.mockImplementationOnce((async (input: unknown) => {
+      markAdapterDispatched();
+      return actualProcess.execute(input as Parameters<typeof actualProcess.execute>[0]);
+    }) as typeof mockAdapterExecute);
     const heartbeat = heartbeatService(db);
     await heartbeat.resumeQueuedRuns();
+    // Measure process startup after the runtime has finished preparing the adapter.
+    await adapterDispatched;
     expect(await waitForValue(async () => runningProcesses.get(runId))).toBeTruthy();
     const [comment] = await db.insert(issueComments).values({ companyId, issueId, authorUserId: "responsible-user", body: "continue" }).returning();
     const [wake] = await db.insert(agentWakeupRequests).values({
