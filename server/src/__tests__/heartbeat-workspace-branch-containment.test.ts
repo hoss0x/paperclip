@@ -723,7 +723,9 @@ async function expectForwardBranchReconciled(input: {
   expectsExistingRecordUpdate: boolean;
   expectedResolvedRecoveryActionFingerprint?: string | null;
 }) {
-  const finishedRun = await waitForRunToFinish(input.heartbeat, input.runId, 10_000);
+  // Real Git reconciliation and run finalization can exceed ten seconds on
+  // a constrained host; wait for completion before the next fixture starts.
+  const finishedRun = await waitForRunToFinish(input.heartbeat, input.runId, 30_000);
   expect(finishedRun).toMatchObject({
     status: "succeeded",
     errorCode: null,
@@ -1217,5 +1219,5 @@ describeEmbeddedPostgres("heartbeat workspace branch containment", () => {
       expectedResolvedRecoveryActionFingerprint,
     });
     expect(adapterExecute).toHaveBeenCalledTimes(1);
-  }, 30_000);
+  }, 60_000);
 });

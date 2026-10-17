@@ -136,3 +136,10 @@ agent-specific `BASH_ENV` startup hook from the test process. That hook can add
 the installed CLI to fixtures that intentionally restrict `PATH`, causing them
 to use a real CLI instead of their isolated fallback. This is test-process
 isolation; it does not change the instance or VPS settings.
+
+The file-download concurrency fixture uses a named pipe. Keep at least two
+libuv I/O workers (`UV_THREADPOOL_SIZE=2`) for that suite; one worker blocks
+the reader while the writer is queued behind it. On hosts with a small thread
+budget, run Vitest directly with one test worker to avoid extra package-manager
+processes. Bound Git index threads only in the test process environment; do not
+change production resource settings.
