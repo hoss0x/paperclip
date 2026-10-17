@@ -11261,6 +11261,8 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await heartbeat.reconcileStrandedAssignedIssues();
     await heartbeat.promoteDueScheduledRetries(new Date(Date.now() + 31_000));
     await heartbeat.resumeQueuedRuns();
+    // Recovery returns after dispatch; classification is written by the background run.
+    await heartbeat.drainActiveRunExecutions();
 
     const livenessWake = await waitForValue(async () => {
       const rows = await db
