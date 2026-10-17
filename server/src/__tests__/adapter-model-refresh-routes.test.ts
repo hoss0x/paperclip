@@ -177,7 +177,10 @@ describe("adapter model refresh route", () => {
     mockListOpenCodeModels.mockReset();
     mockListOpenCodeModels.mockResolvedValue([{ id: "dynamic-opencode-model", label: "dynamic-opencode-model" }]);
     await unregisterTestAdapter(refreshableAdapterType);
-  });
+    // Complete cold route imports before a case can time out and leave a
+    // request running against the next case's reset mocks.
+    await createApp();
+  }, 120_000);
 
   afterEach(async () => {
     await unregisterTestAdapter(refreshableAdapterType);
