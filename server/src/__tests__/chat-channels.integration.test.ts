@@ -4298,6 +4298,8 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await expect(executeConnectorTool(db, binding, "slack_post_message", { channel: "DROUTINE", text: "Revoked", idempotencyKey: randomUUID() })).rejects.toThrow();
   });
 
+  // This case exercises retained authority, publication, approval and OAuth
+  // recovery across many real database transactions in one scenario.
   it("binds Slack tools to the admitted linked request, recovers its provenance and revokes retained access", async () => {
     const { resolveConnectorAssignments, executeConnectorTool, applyConnectorSkills, prepareConnectorSkillDelivery } = await import("../services/connector-runtime.js");
     const { executeSlackTool } = await import("../services/connectors/slack.js");
@@ -4559,7 +4561,7 @@ describeEmbeddedPostgres("chat channel control-plane integration", () => {
     await expect(resolveConnectorAssignments(db, recovered)).resolves.toEqual([]);
     await expect(executeConnectorTool(db, recovered, "slack_history", { channel: "CTOOLS" })).rejects.toThrow("no longer assigned");
     await service.shutdown();
-  });
+  }, 30_000);
 
   it("captures initial Slack communication guidance once per task, ignoring forged message configuration", async () => {
     const fixture = await seedCompany();
