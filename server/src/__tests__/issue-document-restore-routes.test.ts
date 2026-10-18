@@ -197,7 +197,7 @@ async function createApp(
 }
 
 describe("issue document revision routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doUnmock("../services/access.js");
     vi.doUnmock("../services/activity-log.js");
@@ -282,7 +282,9 @@ describe("issue document revision routes", () => {
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue([companyId]);
     mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);
     mockLogActivity.mockResolvedValue(undefined);
-  });
+    // Cold imports belong to setup so timed-out requests cannot leak into reset mocks.
+    await createApp();
+  }, 120_000);
 
   it("returns revision snapshots including title and format", async () => {
     const res = await request(await createApp()).get(`/api/issues/${issueId}/documents/plan/revisions`);

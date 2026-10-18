@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockRegistry = vi.hoisted(() => ({
   getById: vi.fn(),
@@ -143,6 +143,11 @@ function readyPlugin() {
     status: "ready",
   });
 }
+
+// Resolve the route graph outside request deadlines before any case resets mocks.
+beforeAll(async () => {
+  await Promise.all([import("../routes/plugins.js"), import("../middleware/index.js")]);
+}, 120_000);
 
 describe.sequential("plugin install and upgrade authz", () => {
   beforeEach(() => {

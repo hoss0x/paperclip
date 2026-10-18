@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginManifestV1Schema, type PaperclipPluginManifestV1 } from "@paperclipai/shared";
 
 const mockRegistry = vi.hoisted(() => ({
@@ -93,6 +93,11 @@ async function createApp(input: {
 
   return { app, workerManager };
 }
+
+// Resolve the route graph outside request deadlines before any case resets mocks.
+beforeAll(async () => {
+  await Promise.all([import("../routes/plugins.js"), import("../middleware/index.js")]);
+}, 120_000);
 
 describe.sequential("plugin scoped API routes", () => {
   const pluginId = "11111111-1111-4111-8111-111111111111";
