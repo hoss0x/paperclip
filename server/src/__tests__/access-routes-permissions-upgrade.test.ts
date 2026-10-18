@@ -92,7 +92,7 @@ describeEmbeddedPostgres("access routes permissions upgrade compatibility", () =
   // consume the first permission assertion's timeout budget.
   beforeAll(async () => {
     await import("../routes/access.js");
-  }, 30_000);
+  }, 120_000);
 
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-access-routes-permissions-upgrade-");

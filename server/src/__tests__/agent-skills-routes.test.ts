@@ -380,7 +380,7 @@ describe.sequential("agent skill routes", () => {
       vi.importActual<typeof import("../routes/agents.js")>("../routes/agents.js"),
       vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
     ]);
-  });
+  }, 120_000);
 
   it("skips runtime materialization when listing Claude skills", async () => {
     mockAgentService.getById.mockResolvedValue(makeAgent("claude_local"));

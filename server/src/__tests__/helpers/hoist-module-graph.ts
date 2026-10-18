@@ -27,7 +27,7 @@ export function hoistModuleGraph<T>(
   beforeAll(async () => {
     registerMocks();
     graph = await loadGraph();
-  });
+  }, 120_000);
 
   return {
     get value(): T {

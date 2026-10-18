@@ -363,7 +363,7 @@ describe("agent routes adapter validation", () => {
       vi.importActual("../routes/agents.js"),
       vi.importActual("../middleware/index.js"),
     ]);
-  });
+  }, 120_000);
 
   afterEach(async () => {
     await unregisterTestAdapter("external_test");

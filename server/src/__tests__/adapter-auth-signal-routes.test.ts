@@ -151,7 +151,7 @@ describe("adapter auth-signal route", () => {
       vi.importActual("../routes/agents.js"),
       vi.importActual("../middleware/index.js"),
     ]);
-  });
+  }, 120_000);
 
   beforeEach(() => {
     vi.clearAllMocks();

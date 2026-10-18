@@ -272,7 +272,7 @@ async function requestApp(
 }
 
 describe("agent live run routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doUnmock("../services/agents.js");
     vi.doUnmock("../services/heartbeat.js");
@@ -392,7 +392,9 @@ describe("agent live run routes", () => {
       skipped: 0,
       skipReasons: [],
     });
-  });
+    // Resolve the cold route graph before request deadlines and mock resets.
+    await createApp();
+  }, 120_000);
 
   describe("heartbeat run ID validation", () => {
     const routes = [
