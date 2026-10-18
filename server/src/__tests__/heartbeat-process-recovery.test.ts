@@ -11284,7 +11284,9 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       const rows = await db
         .select()
         .from(agentWakeupRequests)
-        .where(eq(agentWakeupRequests.agentId, agentId));
+        .where(eq(agentWakeupRequests.agentId, agentId))
+        // Draining can enqueue later repairs; inspect the first request deterministically.
+        .orderBy(agentWakeupRequests.requestedAt, agentWakeupRequests.id);
       return (
         rows.find((row) => row.reason === "issue_disposition_repair") ?? null
       );
