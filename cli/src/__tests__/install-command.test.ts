@@ -111,6 +111,9 @@ describe("managed install commands", () => {
       if (file === "curl") { fs.writeFileSync(args[args.indexOf("--output") + 1], "archive"); return { stdout: "", stderr: "" }; }
       if (file === "tar") {
         const checkout = args[args.indexOf("-C") + 1];
+        // Real source archives include the runtime skills copied into package staging.
+        fs.mkdirSync(path.join(checkout, "skills", "fixture-skill"), { recursive: true });
+        fs.writeFileSync(path.join(checkout, "skills", "fixture-skill", "SKILL.md"), "# Fixture skill\n");
         const packages = [
           { dir: "packages/shared", name: "@paperclipai/shared", packageJson: { name: "@paperclipai/shared", version: "0.3.1" } },
           { dir: "packages/db", name: "@paperclipai/db", packageJson: { name: "@paperclipai/db", version: "0.3.1", dependencies: { "@paperclipai/shared": "workspace:*" }, bundleDependencies: ["embedded-postgres"] } },
@@ -178,7 +181,12 @@ describe("managed install commands", () => {
       file === "corepack" ||
       (file === "npm" && args[0] === "pack") ||
       (file === process.execPath && args[0]?.endsWith("prepare-bundled-package.mjs")));
-    expect(buildCalls).toHaveLength(9);
+    // The fork also builds the server workspace closure before packaging.
+    expect(buildCalls).toHaveLength(10);
+    expect(buildCalls.some(([file, args]) =>
+      file === "corepack" &&
+      args.join(" ") === "pnpm -r --filter @paperclipai/server... --if-present run build",
+    )).toBe(true);
     for (const call of buildCalls) {
       const env = call[2]?.env;
       expect(env, `${call[0]} ${call[1].join(" ")} must run with an explicit env`).toBeDefined();
