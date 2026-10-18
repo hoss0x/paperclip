@@ -132,9 +132,10 @@ function boundedMarkdownBlocks(text: string): MarkdownNode[] {
     if (end <= start || (!force && end - start < 8_000)) return;
     const block = text.slice(start, end);
     let node: MarkdownNode;
+    // Native sizing below already parses complete blocks. Classify a bounded
+    // block only if it needs splitting, avoiding a second parse for each group.
     if (block.length <= 16_000) {
-      const children = (parseMarkdown(block) as MarkdownNode).children ?? [];
-      node = children.length === 1 ? children[0]! : { type: "literal" };
+      node = { type: "unparsed" };
     } else if (/^(`{3,256}|~{3,256})[^\n]*\n/.test(block))
       node = { type: "code" };
     else
@@ -224,7 +225,10 @@ export function splitNativePublicationText(
       !previous.suffix &&
       !part.prefix &&
       !part.suffix &&
-      previous.text.length + part.text.length <= sourceLimit &&
+      // Keep merged groups within the same bounded parser budget as blocks.
+      // Large groups of tiny paragraphs otherwise allocate a much larger AST
+      // when the provider validates the final native message.
+      previous.text.length + part.text.length <= Math.min(sourceLimit, 16_000) &&
       (provider === "slack" ||
         !expensiveRichBlock(previous.text + part.text)) &&
       combinedSize <= nativeLimit(provider)
@@ -256,11 +260,17 @@ export function splitNativePublicationText(
       append({ text: block });
       continue;
     }
+    const splitNode = node.type === "unparsed"
+      ? (() => {
+          const children = (parseMarkdown(block) as MarkdownNode).children ?? [];
+          return children.length === 1 ? children[0]! : { type: "literal" };
+        })()
+      : node;
     const fenceMatch =
-      node.type === "code"
+      splitNode.type === "code"
         ? /^(`{3,256}|~{3,256})([A-Za-z0-9_+.-]{0,32})\n/.exec(block)
         : null;
-    const isPlain = plain(node);
+    const isPlain = plain(splitNode);
     let offset = 0;
     while (offset < block.length) {
       let size = Math.min(
