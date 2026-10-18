@@ -54,8 +54,10 @@ function localClient(commands: string[]): SandboxManagedRuntimeClient {
   };
 }
 
-// macOS adds per-file process and filesystem overhead to the real deletion lane.
-const realGitTimeoutMs = process.platform === "darwin" ? 300_000 : 180_000;
+// This real 40,000-file scenario includes per-file ancestor/root validation,
+// staging and deletion. Constrained Linux hosts need the same I/O budget as
+// macOS; keep every >32 MiB lane and security check within the timed scenario.
+const realGitTimeoutMs = 300_000;
 it("streams and stages all four real Git filename lanes above 32 MiB through the shared scheduler", async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pc-stream-git-")));
   directories.push(root);
