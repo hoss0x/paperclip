@@ -385,7 +385,7 @@ describe("adapter device-login routes", () => {
   // `afterEach` whether or not the route removed them itself.
   const accountHomeTestDirs: string[] = [];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockDeviceLoginPromotion.mockResolvedValue({
@@ -424,7 +424,9 @@ describe("adapter device-login routes", () => {
           ? { plugin: { id: "plugin-daytona" }, driver: { supportsLoginPty: true } }
           : null,
     );
-  });
+    // Finish cold route imports before requests can outlive a case and use reset mocks.
+    await createApp();
+  }, 120_000);
 
   afterEach(async () => {
     // Release the gate, so every in-flight login run ends and clears its timer.
