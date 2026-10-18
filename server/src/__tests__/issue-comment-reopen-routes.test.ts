@@ -318,7 +318,7 @@ async function waitForWakeup(assertion: () => void) {
 }
 
 describe.sequential("issue comment reopen routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     mockIssueService.getById.mockReset();
     mockIssueService.getByIdForUpdate.mockReset();
@@ -506,7 +506,9 @@ describe.sequential("issue comment reopen routes", () => {
         };
       },
     );
-  });
+    // Finish cold imports before request deadlines and subsequent mock resets.
+    await installActor(createApp());
+  }, 120_000);
 
   it("treats reopen=true as a no-op when the issue is already open", async () => {
     mockIssueService.getById.mockResolvedValue(makeIssue("todo"));

@@ -150,7 +150,7 @@ async function createApp(actor: Record<string, unknown>) {
 }
 
 describe("issue feedback trace routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     mockFeedbackExportService.flushPendingFeedbackTraces.mockResolvedValue({
       attempted: 1,
@@ -172,7 +172,9 @@ describe("issue feedback trace routes", () => {
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue(["company-1"]);
     mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);
     mockLogActivity.mockResolvedValue(undefined);
-  });
+    // Finish cold imports before request deadlines and subsequent mock resets.
+    await createApp({ type: "board", userId: "local-board", companyIds: ["company-1"], source: "local_implicit", isInstanceAdmin: false });
+  }, 120_000);
 
   it("flushes a newly shared feedback trace immediately after saving the vote", async () => {
     const targetId = "11111111-1111-4111-8111-111111111111";

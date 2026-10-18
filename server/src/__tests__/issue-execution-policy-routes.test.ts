@@ -196,7 +196,7 @@ async function createApp(actor?: TestActor) {
 }
 
 describe("issue execution policy routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doUnmock("../services/index.js");
     vi.doUnmock("../routes/issues.js");
@@ -263,7 +263,9 @@ describe("issue execution policy routes", () => {
       };
     });
     mockAccessService.hasPermission.mockResolvedValue(false);
-  });
+    // Finish cold imports before request deadlines and subsequent mock resets.
+    await createApp();
+  }, 120_000);
 
   it("reauthorizes a terminal verdict against the review policy held under the update lock", async () => {
     const issue = {

@@ -210,13 +210,15 @@ function makeDocument(overrides: Record<string, unknown> = {}) {
 }
 
 describe("work product review-document route", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
     registerRouteMocks();
     mockIssueService.getById.mockResolvedValue(makeIssue());
     mockWorkProductService.getById.mockResolvedValue(makeWorkProduct());
-  });
+    // Finish cold imports before request deadlines and subsequent mock resets.
+    await createApp();
+  }, 120_000);
 
   it("returns 404 when the work product belongs to another issue", async () => {
     mockWorkProductService.getById.mockResolvedValue(

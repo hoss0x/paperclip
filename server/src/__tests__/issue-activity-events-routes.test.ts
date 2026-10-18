@@ -197,7 +197,7 @@ function issueUpdateWithReceipt(issue: ReturnType<typeof makeIssue>, patch: Reco
 }
 
 describe("issue activity event routes", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.doUnmock("../services/access.js");
     vi.doUnmock("../services/activity-log.js");
@@ -240,7 +240,9 @@ describe("issue activity event routes", () => {
     });
     mockInstanceSettingsService.listCompanyIds.mockResolvedValue(["company-1"]);
     mockRoutineService.syncRunStatusForIssue.mockResolvedValue(undefined);
-  });
+    // Finish cold imports before request deadlines and subsequent mock resets.
+    await createApp();
+  }, 120_000);
 
   it("returns a field-change receipt and omits a requested no-op field", async () => {
     const issue = makeIssue();
