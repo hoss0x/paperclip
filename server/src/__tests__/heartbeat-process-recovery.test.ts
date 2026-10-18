@@ -8067,7 +8067,12 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       const ready = new Promise<void>((resolve) => {
         reportReady = resolve;
       });
+      let markAdapterDispatched!: () => void;
+      const adapterDispatched = new Promise<void>((resolve) => {
+        markAdapterDispatched = resolve;
+      });
       mockAdapterExecute.mockImplementationOnce((async (input: unknown) => {
+        markAdapterDispatched();
         const context = input as Parameters<typeof actualProcess.execute>[0];
         observedResult = await actualProcess.execute({
           ...context,
@@ -8112,6 +8117,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
         .where(eq(agents.id, agentId));
       const heartbeat = heartbeatService(db);
       await heartbeat.resumeQueuedRuns();
+      await adapterDispatched;
       const running = await waitForValue(async () =>
         runningProcesses.get(runId),
       );
