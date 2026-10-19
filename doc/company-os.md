@@ -107,7 +107,7 @@ pnpm exec vitest run server/src/__tests__/company-os.integration.test.ts ui/src/
 pnpm check:token-gates
 ```
 
-The browser scenario creates two employees through the existing setup UI, saves
+The browser scenario creates a company through onboarding, then creates two employees through the existing setup UI, saves
 and revises a contract, creates a mission and owned workstream, then sends a
 receipt without creating a task. Build the UI before using its focused config:
 
@@ -122,7 +122,7 @@ by the configured Antigravity account. The live test subscribes the specialist
 and owner. Starting the mission wakes the owner, which requests the specialist
 by capability. The test waits for a finding, correlated reply, automatic return
 wake, acknowledgement and all three successful runs. It checks the mission-start
-and receipt context packs, the returned knowledge and unchanged work ownership. It writes `live-receipt-evidence.json` and a timeline
+and receipt context packs, the returned knowledge and unchanged work ownership. The specialist is company-scoped and is not a Mission participant. It seeds 100 findings, drains them through successful real-agent runs without duplicate delivery, rejects a protected lifecycle spoof and a denied completion, and verifies two-way tenant boundaries. It writes `live-receipt-evidence.json` and a timeline
 screenshot under the Playwright output directory.
 
 The harness always uses a temporary instance home and a separate port. If
@@ -158,3 +158,7 @@ Migration0301 adds company mission/policy, event sequence/origin/source identity
 Knowledge context uses a replaceable deterministic retriever: explicit entity IDs and ownership keys, two current-relationship hops, scoped text matching, then Mission-scoped recent updates as fallback. Cross-company and unrelated project scope is excluded. All explicitly linked Mission Goals are included alongside relevant company/employee Goals. Pack budgets still apply; long text has a bounded preview and full records remain accessible through the API.
 
 This correction is not approved for master merge or production deployment. Apply only to isolated development while validation is in progress. For an eventual approved deployment, use the existing backup, matching-build and forward migration workflow. Roll back application code after stopping new organizational runs; retain the additive tables/columns and immutable evidence.
+
+Scoped Contract read modes resolve ownership from stored Mission, Receipt, Contract or Run Context records. Unscoped collection reads fail closed for owned/assigned/participant-only policies; use a resource endpoint or a Mission-scoped event query. Caller-provided ownership query hints do not confer authority.
+
+On the validation VPS, live browser workers use 512 MiB per agent and two agent admission slots in the throwaway instance. Its aggregate execution capacity must match the existing shared host slice (5949 MiB at validation); a mismatch is rejected by resource admission. Do not reconfigure the shared production slice to fit a test. This changes only the test controller environment, not production limits.

@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { saveEmployeeContractSchema, missionSchema, workstreamSchema, receiptSchema, contextEventSchema, knowledgeEntitySchema, knowledgeRelationshipSchema } from "@paperclipai/shared";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { assertOrganizationPermission } from "../services/organization-policy.js";
+import { assertOrganizationPermission, type PolicyScope } from "../services/organization-policy.js";
 import { companyOsService } from "../services/company-os.js";
 
 const id = z.string().uuid();
@@ -20,7 +20,23 @@ export function companyOsRoutes(db: Db) {
   router.use(async (req, _res, next) => {
     if (req.method === "GET") {
       const action = req.path.startsWith("/knowledge") || req.path.startsWith("/relationships") ? "knowledge.read" : req.path.startsWith("/events") ? "event.read" : req.path.startsWith("/receipts") ? "receipt.read" : req.path.startsWith("/context-packs") ? "context.read" : "mission.read";
-      await assertOrganizationPermission(db, company(req), getActorInfo(req), action);
+      // Resolve scope from canonical records, never from caller-supplied ownership.
+      // Collection reads without a resource stay fail-closed for scoped policies.
+      let scope: PolicyScope = {};
+      const missionMatch = req.path.match(/^\/missions\/([^/]+)(?:\/workstreams)?$/);
+      const receiptMatch = req.path.match(/^\/receipts\/([^/]+)$/);
+      const packMatch = req.path.match(/^\/context-packs\/([^/]+)$/);
+      const contractMatch = req.path.match(/^\/contracts\/([^/]+)(?:\/history)?$/);
+      if (missionMatch) scope = (await svc.getMission(company(req), id.parse(missionMatch[1]))).data;
+      else if (receiptMatch) {
+        const receipt = await svc.getReceipt(company(req), id.parse(receiptMatch[1]));
+        scope = { ownerAgentId: receipt.senderAgentId, assignedAgentId: receipt.recipientAgentId, participantAgentIds: [receipt.senderAgentId, receipt.recipientAgentId] };
+      } else if (packMatch) {
+        const pack = await svc.getPack(company(req), id.parse(packMatch[1]));
+        scope = { ownerAgentId: pack.agentId, assignedAgentId: pack.agentId };
+      } else if (contractMatch) scope = { ownerAgentId: id.parse(contractMatch[1]), assignedAgentId: id.parse(contractMatch[1]) };
+      else if (req.path === "/events" && req.query.missionId) scope = (await svc.getMission(company(req), id.parse(req.query.missionId))).data;
+      await assertOrganizationPermission(db, company(req), getActorInfo(req), action, scope);
     }
     next();
   });

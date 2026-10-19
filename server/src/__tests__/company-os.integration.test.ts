@@ -205,6 +205,17 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     await expect(svc.saveMission(c, null, missionInput(), 0, asAgent(a))).rejects.toMatchObject({ status: 403 });
     expect((await request(app(c, a)).put(`/api/companies/${c}/organization/contracts/${a}`).send({ expectedVersion: 2, contract: contract() })).status).toBe(403);
   });
+  it("enforces scoped resource reads using persisted ownership rather than query hints", async () => {
+    const owned = await mission();
+    const foreign = await svc.saveMission(c, null, { ...missionInput(), ownerAgentId: b, participantAgentIds: [b] }, 0, board);
+    await svc.saveContract(c, a, { ...contract(), policy: { defaultMode: "allowed", permissions: { "mission.read": "owned_only" } } }, 0, board);
+    const root = `/api/companies/${c}/organization`;
+    expect((await request(app(c, a)).get(`${root}/missions/${owned.id}`)).status).toBe(200);
+    expect((await request(app(c, a)).get(`${root}/missions/${foreign.id}?ownerAgentId=${a}`)).status).toBe(403);
+    expect((await request(app(c, a)).get(`${root}/contracts/${a}`)).status).toBe(200);
+    expect((await request(app(c, a)).get(`${root}/contracts/${b}`)).status).toBe(403);
+    expect((await request(app(c, a)).get(`${root}/missions`)).status).toBe(403);
+  });
   it("rejects protected event spoofing and records observation authority", async () => {
     const m = await mission();
     const observation = { kind: "finding.observed", subject: "Evidence", summary: "Observed fact", missionId: m.id, projectId: projectId, entityIds: [], causationId: null, correlationId: null, metadata: {} };
