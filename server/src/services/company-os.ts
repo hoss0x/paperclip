@@ -198,8 +198,8 @@ export function companyOsService(db: Db) {
         const employees = await tx.select({ id: agents.id, reportsTo: agents.reportsTo }).from(agents).where(eq(agents.companyId, companyId));
         for (const provider of advertised) {
           const inMission = [mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(provider.agentId);
-          const exposed = (provider.contract.serviceExposures ?? []).some(exposure => {
-            if (exposure.capability !== input.capability) return false;
+          const exposures = (provider.contract.serviceExposures ?? []).filter(e => e.capability === input.capability);
+          const exposed = exposures.some(exposure => {
             if (exposure.scope === "company") return true;
             if (exposure.scope === "mission") return inMission;
             const root = exposure.orgRootAgentId ?? provider.agentId;
@@ -211,7 +211,8 @@ export function companyOsService(db: Db) {
             }
             return false;
           });
-          if (!inMission && !exposed) continue;
+          // Explicit scope overrides legacy Mission-local advertising.
+          if (exposures.length ? !exposed : !inMission) continue;
           try { await assertOrganizationPermission(tx, companyId, { actorType: "agent", actorId: provider.agentId }, "receipt.read", { ...mission.data, assignedAgentId: provider.agentId }); }
           catch (error) { if ((error as { status?: number }).status === 403) continue; throw error; }
           matches.push(provider);

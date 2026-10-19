@@ -79,6 +79,21 @@ export async function compileOrganizationContext(db: Db, run: typeof heartbeatRu
     const entries = pack[section] as unknown[];
     while (JSON.stringify(pack).length > 100000 && entries.length) entries.pop();
   }
+  // A large core must not starve the oldest event forever. Retain identity,
+  // contract, receipt payload and all linked Goal IDs; compact recoverable
+  // descriptive fields before reserving at least one stream item.
+  if (events.length && !(pack.changes as unknown[]).length) {
+    pack.companyMission = company?.mission ? preview(company.mission, 2000) : null;
+    pack.goals = employeeGoals.map(g => ({ id: g.id, title: preview(g.title, 80), description: "", level: g.level }));
+    if (mission) pack.mission = { ...(pack.mission as object),
+      metadata: { omittedFromContext: true },
+      constraints: mission.data.constraints.slice(0, 10).map(v => preview(v, 200)),
+      successCriteria: mission.data.successCriteria.slice(0, 10).map(v => preview(v, 200)),
+      contextCompacted: true,
+    };
+    const first = changes[0];
+    pack.changes = [{ id: first.id, kind: first.kind, subject: preview(first.subject, 200), summary: preview(first.summary, 1000), causationId: first.causationId, correlationId: first.correlationId, createdAt: first.createdAt, origin: first.origin, sequence: first.sequence }];
+  }
   const includedIds = new Set((pack.knowledge as { id: string }[]).map(e => e.id));
   pack.relationships = (pack.relationships as { sourceId: string; targetId: string }[]).filter(r => includedIds.has(r.sourceId) && includedIds.has(r.targetId));
   const deliveredChanges = pack.changes as { id: string; sequence: number }[];

@@ -188,6 +188,23 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     expect(pack!.eventIds).toEqual((pack!.pack.changes as { id: string }[]).map(e => e.id));
     expect(pack!.pack).toMatchObject({ contract: { version: 1 }, mission: { id: m.id } });
   });
+  it("keeps the stream progressing when large core fields compete with delta space", async () => {
+    await svc.saveContract(c, b, { ...contract(), purpose: "x".repeat(20000) }, 0, board);
+    await db.update(companies).set({ mission: "x".repeat(10000) }).where(eq(companies.id, c));
+    const linked = Array.from({ length: 100 }, () => randomUUID());
+    await db.insert(goals).values(linked.map(id => ({ id, companyId: c, title: "x".repeat(300), description: "x".repeat(500), level: "agent", ownerAgentId: a })));
+    const m = await svc.saveMission(c, null, { ...missionInput(), goalIds: linked, constraints: Array.from({ length: 10 }, () => "x".repeat(2000)) }, 0, board);
+    const receipt = await svc.sendReceipt(c, receiptSchema.parse({ missionId: m.id, senderAgentId: a, recipientAgentId: b, kind: "investigation_request", subject: "Inspect core", payload: { data: "x".repeat(19000) }, idempotencyKey: randomUUID() }), asAgent(a));
+    const r = await run(b, { organizationReceiptId: receipt.id });
+    const pack = await compileOrganizationContext(db, r, r.contextSnapshot!);
+    expect(JSON.stringify(pack!.pack).length).toBeLessThanOrEqual(100000);
+    expect(pack!.eventIds.length).toBeGreaterThan(0);
+    expect((pack!.pack.goals as { id: string }[]).map(g => g.id)).toEqual(expect.arrayContaining(linked));
+    await db.update(heartbeatRuns).set({ status: "succeeded" }).where(eq(heartbeatRuns.id, r.id));
+    await settleOrganizationRuns(db);
+    const next = await compileOrganizationContext(db, await run(b, {}), { organizationReceiptId: receipt.id });
+    expect((next!.pack.delta as { afterSequence: number }).afterSequence).toBeGreaterThan(0);
+  });
   it("detects generic and nested path conflicts without sibling-prefix false positives", () => {
     expect(boundariesOverlap({ kind: "path", resource: "src/auth" }, { kind: "path", resource: "src/auth/api" })).toBe(true);
     expect(boundariesOverlap({ kind: "path", resource: "src/auth" }, { kind: "path", resource: "src/authors" })).toBe(false);
@@ -270,6 +287,22 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     const extra = randomUUID(); await db.insert(agents).values({ id: extra, companyId: c, name: "Another provider" });
     await svc.saveContract(c, extra, { ...contract(), serviceExposures: [{ capability: "research", scope: "company" }] }, 0, board);
     await expect(svc.sendReceipt(c, receiptSchema.parse({ missionId: m.id, senderAgentId: a, capability: "research", kind: "information_request", subject: "Ambiguous", payload: {}, idempotencyKey: randomUUID() }), asAgent(a))).rejects.toMatchObject({ status: 409 });
+  });
+  it("honors explicit subtree scope even when the provider participates in the Mission", async () => {
+    await svc.saveContract(c, b, { ...contract(), serviceExposures: [{ capability: "research", scope: "org_subtree", orgRootAgentId: b }] }, 0, board);
+    const m = await mission();
+    const input = () => receiptSchema.parse({ missionId: m.id, senderAgentId: a, capability: "research", kind: "investigation_request", subject: "Scoped request", payload: {}, idempotencyKey: randomUUID() });
+    await expect(svc.sendReceipt(c, input(), asAgent(a))).rejects.toMatchObject({ status: 409 });
+    await db.update(agents).set({ reportsTo: b }).where(eq(agents.id, a));
+    expect((await svc.sendReceipt(c, input(), asAgent(a))).recipientAgentId).toBe(b);
+    await svc.saveContract(c, b, { ...contract(), serviceExposures: [{ capability: "research", scope: "company" }], policy: { defaultMode: "allowed", permissions: { "receipt.read": "denied" } } }, 1, board);
+    await expect(svc.sendReceipt(c, input(), asAgent(a))).rejects.toMatchObject({ status: 409 });
+  });
+  it("fails closed for approval-required employee actions while retaining board governance", async () => {
+    const m = await mission();
+    await svc.saveContract(c, a, { ...contract(), policy: { defaultMode: "allowed", permissions: { "mission.complete": "approval_required" } } }, 0, board);
+    await expect(svc.saveMission(c, m.id, { ...m.data, status: "completed" }, m.version, asAgent(a))).rejects.toMatchObject({ status: 403 });
+    expect((await svc.saveMission(c, m.id, { ...m.data, status: "completed" }, m.version, board)).data.status).toBe("completed");
   });
   it("retrieves old explicit knowledge and its current graph neighborhood before new unrelated records", async () => {
     const m = await mission();

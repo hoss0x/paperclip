@@ -9,7 +9,7 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
   page.on("pageerror", error => console.error("Native organization browser error:", error.message));
   await page.addLocatorHandler(page.getByRole("button", { name: "Dismiss announcement", exact: true }), async button => { await button.click(); });
   const live = process.env.PAPERCLIP_COMPANY_OS_LIVE === "1";
-  if (live) test.setTimeout(600000);
+  if (live) test.setTimeout(900000);
   await request.patch("/api/instance/settings/experimental", { data: { enableConferenceRoomChat: true } });
   await page.goto("/onboarding");
   const start = page.getByRole("button", { name: /Start Onboarding|New Organization|Add Agent/ });
@@ -84,7 +84,7 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Current contract: version 1", { exact: true })).toBeVisible();
     for (const employee of [owner, specialist]) {
-      const updated = await request.patch(`/api/agents/${employee.id}`, { data: { adapterConfig: { ...employee.adapterConfig, model: process.env.PAPERCLIP_COMPANY_OS_MODEL, dangerouslySkipPermissions: true, timeoutSec: 120, promptTemplate: "Process the supplied organizational wake event using the employee contract and mission. Complete this interaction using its API and exit.", desiredSkills: [] } } });
+      const updated = await request.patch(`/api/agents/${employee.id}`, { data: { adapterConfig: { ...employee.adapterConfig, model: process.env.PAPERCLIP_COMPANY_OS_MODEL, dangerouslySkipPermissions: true, timeoutSec: 240, promptTemplate: "Process the supplied organizational wake event using the employee contract and mission. Complete this interaction using its API and exit.", desiredSkills: [] } } });
       expect(updated.ok(), await updated.text()).toBe(true);
     }
   }
@@ -130,7 +130,7 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
     const receipts = await (await request.get(`${base}/receipts`)).json(); expect(receipts).toHaveLength(1);
   }
   if (live) {
-    await expect.poll(async () => (await (await request.get(`${base}/receipts`)).json()).length, { timeout: 240000, intervals: [2000, 5000] }).toBe(2);
+    await expect.poll(async () => (await (await request.get(`${base}/receipts`)).json()).length, { timeout: 420000, intervals: [2000, 5000] }).toBe(2);
     await expect.poll(async () => (await (await request.get(`${base}/receipts`)).json()).find((r: { parentReceiptId: string | null }) => r.parentReceiptId)?.status, { timeout: 120000, intervals: [2000, 5000] }).toBe("acknowledged");
     const roundTrip = await (await request.get(`${base}/receipts`)).json();
     expect(roundTrip[0].correlationId).toBe(roundTrip[1].correlationId);
