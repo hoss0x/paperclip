@@ -109,6 +109,8 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
   const activeMission = savedMissions.find((m: { data: { title: string } }) => m.data.title === "Produce a verified recommendation");
   expect(activeMission.data.participantAgentIds).not.toContain(specialist.id);
   if (live) {
+    const seed = await request.post(`${base}/knowledge`, { data: { kind: "reference", key: "recommendation-evidence-register", name: "Recommendation evidence register", summary: "Use verified evidence for the recommendation", missionId: activeMission.id, projectId: project.id, metadata: {}, provenance: "Board-provided acceptance fixture", confidence: 1 } });
+    expect(seed.ok(), await seed.text()).toBe(true);
     for (let index = 0; index < 100; index++) {
       const response = await request.post(`${base}/events`, { data: { kind: "finding.observed", subject: `Backlog finding ${index}`, summary: "Evidence awaiting consumption", missionId: activeMission.id, projectId: project.id, entityIds: [], causationId: null, correlationId: null, metadata: {} } });
       expect(response.ok()).toBe(true);
@@ -166,6 +168,7 @@ test("board creates employees, contracts, a mission, ownership and a receipt wit
     expect(initiationRun).toBeTruthy();
     const initiation = await (await request.get(`${base}/context-packs/${initiationRun.id}`)).json();
     expect(initiation.pack.receipt).toBeNull();
+    expect(initiation.pack.knowledge.some((entity: { name: string }) => entity.name === "Recommendation evidence register")).toBe(true);
     expect(initiation.pack.workstreams[0].title).toBe("Recommendation ownership");
     packs.push({ runId: initiationRun.id, employeeId: owner.id, status: initiationRun.status, packId: initiation.id, missionId: initiation.missionId, contractVersion: initiation.contractVersion, wakeReason: initiation.pack.wakeReason, receiptId: null });
     const streams = await (await request.get(`${base}/missions/${roundTrip[0].missionId}/workstreams`)).json();
