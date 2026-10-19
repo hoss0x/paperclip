@@ -1,13 +1,13 @@
-import { cloneElement, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
+import { cloneElement, useId, useState, type ReactElement, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "../lib/router";
-import { employeeContractSchema, organizationEventKinds, receiptKinds, type EmployeeContract, type MissionInput, type WorkstreamInput, type KnowledgeEntityInput, type Receipt } from "@paperclipai/shared";
+import { employeeContractSchema, organizationActions, organizationPolicyModes, organizationEventKinds, receiptKinds, type EmployeeContract, type MissionInput, type WorkstreamInput, type KnowledgeEntityInput, type Receipt } from "@paperclipai/shared";
 import { companyOsApi as api } from "../api/company-os";
 import { agentsApi } from "../api/agents";
 import { goalsApi } from "../api/goals";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
-import { useBreadcrumbs } from "../context/BreadcrumbContext";
+
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
@@ -35,19 +35,19 @@ function Select({ label, value, onChange, options, optional = false }: { label: 
 function Form({ children, save, cancel, busy }: { children: ReactNode; save: () => void; cancel: () => void; busy: boolean }) {
   return <form className="space-y-4 rounded-lg border p-4" onSubmit={e => { e.preventDefault(); save(); }}><fieldset disabled={busy} className="space-y-4">{children}<div className="flex items-center justify-between gap-4"><Button type="button" variant="outline" onClick={cancel}>Cancel</Button><Button type="submit">{busy ? "Saving…" : "Save"}</Button></div></fieldset></form>;
 }
-export function CompanyOs() {
+export type OrganizationSection = "Missions" | "Contracts" | "Receipts" | "Knowledge" | "Timeline" | "Run context";
+export function OrganizationPanel(props: { section: OrganizationSection; companyId?: string; agentId?: string; projectId?: string; runId?: string }) {
   const { selectedCompanyId } = useCompany();
-  const { setBreadcrumbs } = useBreadcrumbs();
-  useEffect(() => { setBreadcrumbs([{ label: "Company OS" }]); }, [setBreadcrumbs]);
-  return selectedCompanyId ? <Organization key={selectedCompanyId} companyId={selectedCompanyId} /> : <p>Select a company to open Company OS.</p>;
+  const companyId = props.companyId ?? selectedCompanyId;
+  return companyId ? <Organization key={[companyId, props.agentId, props.projectId, props.runId, props.section].join(":")} {...props} companyId={companyId} /> : <p>Select a company.</p>;
 }
-function Organization({ companyId: c }: { companyId: string }) {
+function Organization({ companyId: c, section, agentId, projectId, runId: fixedRunId }: { companyId: string; section: OrganizationSection; agentId?: string; projectId?: string; runId?: string }) {
   const cache = useQueryClient();
-  const [tab, setTab] = useState("Missions");
+  const tab = section;
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [missionId, setMissionId] = useState("");
-  const [contractAgent, setContractAgent] = useState("");
+  const [contractAgent, setContractAgent] = useState(agentId ?? "");
   const [contractExpectedVersion, setContractExpectedVersion] = useState(0);
   const [contractDraft, setContractDraft] = useState<EmployeeContract | null>(null);
   const [missionDraft, setMissionDraft] = useState<{ id: string | null; version: number; data: MissionInput } | null>(null);
@@ -55,46 +55,46 @@ function Organization({ companyId: c }: { companyId: string }) {
   const [knowledgeDraft, setKnowledgeDraft] = useState<{ id: string | null; version: number; data: KnowledgeEntityInput } | null>(null);
   const [search, setSearch] = useState("");
   const [runInput, setRunInput] = useState("");
-  const [runId, setRunId] = useState("");
+  const [runId, setRunId] = useState(fixedRunId ?? "");
   const [history, setHistory] = useState(false);
   const [before, setBefore] = useState<string | undefined>();
   const [receiptDraft, setReceiptDraft] = useState<{ sender: string; recipient: string; capability: string; kind: string; subject: string; content: string; parent: Receipt | null; key: string } | null>(null);
   const [relation, setRelation] = useState({ source: "", target: "", kind: "", provenance: "", supersedes: "" });
-  const prefix = ["company-os", c];
-  const agents = useQuery({ queryKey: [...prefix, "agents"], queryFn: () => agentsApi.list(c) });
-  const goals = useQuery({ queryKey: [...prefix, "goals"], queryFn: () => goalsApi.list(c) });
-  const projects = useQuery({ queryKey: [...prefix, "projects"], queryFn: () => projectsApi.list(c) });
-  const missions = useQuery({ queryKey: [...prefix, "missions"], queryFn: () => api.missions(c) });
+  const companyPrefix = ["organization", c];
+  const prefix = [...companyPrefix, projectId ?? null, agentId ?? null];
+  const agents = useQuery({ queryKey: [...prefix, "agents"], queryFn: () => agentsApi.list(c), enabled: tab !== "Run context" });
+  const goals = useQuery({ queryKey: [...prefix, "goals"], queryFn: () => goalsApi.list(c), enabled: tab === "Contracts" || tab === "Missions" });
+  const projects = useQuery({ queryKey: [...prefix, "projects"], queryFn: () => projectsApi.list(c), enabled: tab !== "Run context" });
+  const missions = useQuery({ queryKey: [...prefix, "missions"], queryFn: async () => (await api.missions(c)).filter(m => !projectId || m.data.projectIds.includes(projectId)), enabled: tab !== "Run context" && tab !== "Contracts" });
   const workstreams = useQuery({ queryKey: [...prefix, "workstreams", missionId], queryFn: () => api.workstreams(c, missionId), enabled: !!missionId });
   const receipts = useQuery({ queryKey: [...prefix, "receipts", missionId], queryFn: () => api.receipts(c, missionId || undefined), enabled: tab === "Receipts", refetchInterval: 10000 });
   const events = useQuery({ queryKey: [...prefix, "events", missionId, before], queryFn: () => api.events(c, missionId || undefined, before), enabled: tab === "Timeline", refetchInterval: before ? false : 10000 });
-  const knowledge = useQuery({ queryKey: [...prefix, "knowledge", search], queryFn: () => api.knowledge(c, search), enabled: tab === "Knowledge" });
+  const knowledge = useQuery({ queryKey: [...prefix, "knowledge", search], queryFn: async () => (await api.knowledge(c, search)).filter(e => !projectId || e.data.projectId === projectId || !!missions.data?.some(m => m.id === e.data.missionId)), enabled: tab === "Knowledge" });
   const relationships = useQuery({ queryKey: [...prefix, "relationships", history], queryFn: () => api.relationships(c, history), enabled: tab === "Knowledge" });
   const contract = useQuery({ queryKey: [...prefix, "contract", contractAgent], queryFn: () => api.contract(c, contractAgent), enabled: !!contractAgent });
   const revisions = useQuery({ queryKey: [...prefix, "history", contractAgent], queryFn: () => api.history(c, contractAgent), enabled: !!contractAgent });
-  const pack = useQuery({ queryKey: [...prefix, "pack", runId], queryFn: () => api.pack(c, runId), enabled: !!runId });
+  const pack = useQuery({ queryKey: [...prefix, "pack", runId], queryFn: async () => { try { return await api.pack(c, runId); } catch (error) { if ((error as { status?: number }).status === 404) return null; throw error; } }, enabled: !!runId, retry: false });
   const employeeOptions = (agents.data ?? []).map(a => ({ id: a.id, name: a.name }));
   const selectedMission = missions.data?.find(m => m.id === missionId);
   const missionOptions = (missions.data ?? []).map(m => ({ id: m.id, name: m.data.title }));
   const participantOptions = employeeOptions.filter(a => [selectedMission?.data.ownerAgentId, ...(selectedMission?.data.participantAgentIds ?? [])].includes(a.id));
   const save = async (action: () => Promise<unknown>, onSaved: () => void = () => {}) => {
     setBusy(true); setError("");
-    try { await action(); onSaved(); await cache.invalidateQueries({ queryKey: prefix }); } catch (e) { setError(e instanceof Error ? e.message : "Could not save changes"); } finally { setBusy(false); }
+    try { await action(); onSaved(); await cache.invalidateQueries({ queryKey: companyPrefix }); } catch (e) { setError(e instanceof Error ? e.message : "Could not save changes"); } finally { setBusy(false); }
   };
   const queryError = [agents, goals, projects, missions, workstreams, receipts, events, knowledge, relationships, contract, revisions, pack].find(q => q.error)?.error;
   const updateMission = (data: Partial<MissionInput>) => setMissionDraft(d => d ? { ...d, data: { ...d.data, ...data } } : d);
   const updateWork = (data: Partial<WorkstreamInput>) => setWorkDraft(d => d ? { ...d, data: { ...d.data, ...data } } : d);
   const updateKnowledge = (data: Partial<KnowledgeEntityInput>) => setKnowledgeDraft(d => d ? { ...d, data: { ...d.data, ...data } } : d);
   const newReceipt = (parent: Receipt | null = null) => setReceiptDraft({ sender: parent?.recipientAgentId ?? "", recipient: parent?.senderAgentId ?? "", capability: "", kind: parent ? "result" : "investigation_request", subject: parent ? `Re: ${parent.subject}` : "", content: "", parent, key: crypto.randomUUID() });
+  if (fixedRunId && !pack.isLoading && !pack.data && !pack.error) return null;
   return <div className="space-y-4">
-    <h1 className="text-xl font-semibold">Company OS</h1>
-    <p className="text-sm text-muted-foreground">Coordinate employees, missions, services, and shared company knowledge.</p>
-    <div className="flex flex-wrap gap-2" role="tablist">{["Missions", "Contracts", "Receipts", "Knowledge", "Timeline", "Run context"].map(t => <Button key={t} role="tab" aria-selected={tab === t} variant={tab === t ? "default" : "outline"} onClick={() => { setTab(t); setError(""); }}>{t}</Button>)}</div>
+    <h2 className="text-lg font-medium">{section === "Timeline" ? "Operational context" : section === "Run context" ? "Context supplied to this run" : section}</h2>
     {(error || queryError) && <p role="alert" className="text-sm text-destructive">{error || queryError?.message}</p>}
     {missions.isLoading && <p>Loading organization…</p>}
     {["Missions", "Receipts", "Timeline"].includes(tab) && <Select label="Mission" value={missionId} onChange={v => { setMissionId(v); setWorkDraft(null); setReceiptDraft(null); setBefore(undefined); }} options={missionOptions} optional />}
     {tab === "Missions" && <>
-      <Button onClick={() => setMissionDraft({ id: null, version: 0, data: emptyMission() })}>New mission</Button>
+      <Button onClick={() => setMissionDraft({ id: null, version: 0, data: { ...emptyMission(), projectIds: projectId ? [projectId] : [] } })}>New mission</Button>
       {!missionId && !missionDraft && <div className="space-y-2">{missions.data?.map(m => <Button variant="outline" key={m.id} onClick={() => setMissionId(m.id)}>{m.data.title} · {m.data.status}</Button>)}</div>}
       {selectedMission && !missionDraft && <section className="space-y-3 rounded-lg border p-4"><h2 className="text-lg font-medium">{selectedMission.data.title}</h2><p>{selectedMission.data.objective}</p><p className="text-sm">{selectedMission.data.status} · Version {selectedMission.version}</p><p className="whitespace-pre-wrap">{selectedMission.data.summary}</p><p className="whitespace-pre-wrap">{selectedMission.data.roadmap}</p><Button variant="outline" onClick={() => setMissionDraft({ id: selectedMission.id, version: selectedMission.version, data: selectedMission.data })}>Edit mission</Button></section>}
       {missionDraft && <Form busy={busy} cancel={() => setMissionDraft(null)} save={() => void save(() => api.saveMission(c, missionDraft.id, missionDraft.data, missionDraft.version), () => setMissionDraft(null))}>
@@ -127,12 +127,25 @@ function Organization({ companyId: c }: { companyId: string }) {
       </section>}
     </>}
     {tab === "Contracts" && <>
+      {agentId && <section className="space-y-2"><h3 className="font-medium">Employee goals</h3>{goals.data?.filter(g => g.ownerAgentId === agentId).map(g => <p key={g.id}><Link to={`/goals/${g.id}`}>{g.title}</Link> · {g.status}</p>)}</section>}
+
       <p className="text-sm"><Link className="underline" to="/agents">Create employees and edit reporting relationships</Link> · <Link className="underline" to="/goals">Manage goals</Link></p>
-      <Select label="Employee" value={contractAgent} options={employeeOptions} onChange={v => { setContractAgent(v); setContractDraft(null); }} />
-      {contractAgent && !contract.isLoading && !contractDraft && <><p>Current contract: {contract.data ? `version ${contract.data.version}` : "not defined"}</p><Button onClick={() => { setContractExpectedVersion(contract.data?.version ?? 0); setContractDraft(contract.data?.contract ?? employeeContractSchema.parse({})); }}>Edit contract</Button></>}
+      {!agentId && <Select label="Employee" value={contractAgent} options={employeeOptions} onChange={v => { setContractAgent(v); setContractDraft(null); }} />}
+      {contractAgent && !contract.isLoading && !contractDraft && <><p>Current contract: {contract.data ? `version ${contract.data.version}` : "not defined"}</p><Button onClick={() => { setContractExpectedVersion(contract.data?.version ?? 0); setContractDraft(employeeContractSchema.parse(contract.data?.contract ?? {})); }}>Edit contract</Button></>}
       {contractDraft && <Form busy={busy} cancel={() => setContractDraft(null)} save={() => void save(() => api.saveContract(c, contractAgent, contractDraft, contractExpectedVersion), () => setContractDraft(null))}>
         {([['purpose', 'Purpose'], ['mission', 'Persistent objective'], ['runtimeInstructions', 'Runtime instructions'], ['reportingExpectations', 'Reporting expectations']] as const).map(([field, label]) => <Field key={field} label={label}><Textarea value={contractDraft[field]} onChange={e => setContractDraft({ ...contractDraft, [field]: e.target.value })} /></Field>)}
         {([['responsibilities', 'Responsibilities'], ['expectedOutcomes', 'Expected outcomes'], ['authority', 'Decision rights'], ['prohibitedActions', 'Prohibited actions'], ['capabilities', 'Capabilities'], ['servicesProvided', 'Services provided'], ['servicesConsumed', 'Services consumed'], ['escalationRules', 'Escalation rules'], ['collaborationRules', 'Collaboration rules'], ['operatingPolicies', 'Operating policies']] as const).map(([field, label]) => <Lines key={field} label={label} value={contractDraft[field]} onChange={v => setContractDraft({ ...contractDraft, [field]: v })} />)}
+        <h3 className="font-medium">Enforced action policy</h3>
+        <Select label="Default action policy" value={contractDraft.policy.defaultMode} options={["allowed", "denied"].map(id => ({ id, name: id }))} onChange={v => setContractDraft({ ...contractDraft, policy: { ...contractDraft.policy, defaultMode: v as "allowed" | "denied" } })} />
+        {organizationActions.map(action => <Select key={action} label={action} optional value={contractDraft.policy.permissions[action] ?? ""} options={organizationPolicyModes.map(id => ({ id, name: id }))} onChange={v => { const permissions = { ...contractDraft.policy.permissions }; if (v) permissions[action] = v as typeof organizationPolicyModes[number]; else delete permissions[action]; setContractDraft({ ...contractDraft, policy: { ...contractDraft.policy, permissions } }); }} />)}
+        <h3 className="font-medium">Service exposure</h3>
+        {contractDraft.serviceExposures.map((exposure, index) => <div key={index} className="space-y-2 rounded-lg border p-3">
+          <Field label="Capability / service"><Input required value={exposure.capability} onChange={e => setContractDraft({ ...contractDraft, serviceExposures: contractDraft.serviceExposures.map((v, i) => i === index ? { ...v, capability: e.target.value } : v) })} /></Field>
+          <Select label="Service scope" value={exposure.scope} options={["mission", "org_subtree", "company"].map(id => ({ id, name: id }))} onChange={v => setContractDraft({ ...contractDraft, serviceExposures: contractDraft.serviceExposures.map((e, i) => i === index ? { ...e, scope: v as typeof exposure.scope } : e) })} />
+          {exposure.scope === "org_subtree" && <Select label="Organization subtree root" optional value={exposure.orgRootAgentId ?? ""} options={employeeOptions} onChange={v => setContractDraft({ ...contractDraft, serviceExposures: contractDraft.serviceExposures.map((e, i) => i === index ? { ...e, orgRootAgentId: v || undefined } : e) })} />}
+          <Button type="button" variant="outline" onClick={() => setContractDraft({ ...contractDraft, serviceExposures: contractDraft.serviceExposures.filter((_, i) => i !== index) })}>Remove service exposure</Button>
+        </div>)}
+        <Button type="button" variant="outline" onClick={() => setContractDraft({ ...contractDraft, serviceExposures: [...contractDraft.serviceExposures, { capability: "", scope: "mission" }] })}>Add service exposure</Button>
         <Choices label="Wake subscriptions" values={contractDraft.eventSubscriptions} options={organizationEventKinds.map(id => ({ id, name: id }))} onChange={v => setContractDraft({ ...contractDraft, eventSubscriptions: v as EmployeeContract["eventSubscriptions"] })} />
         <Lines label="Additional event subscriptions" value={contractDraft.eventSubscriptions.filter(v => !(organizationEventKinds as readonly string[]).includes(v))} onChange={v => setContractDraft({ ...contractDraft, eventSubscriptions: [...new Set([...contractDraft.eventSubscriptions.filter(value => (organizationEventKinds as readonly string[]).includes(value)), ...v])] })} />
         <Field label="Scheduled review interval in minutes (optional, at least 15)"><Input type="number" min={15} value={contractDraft.scheduledReviewMinutes ?? ""} onChange={e => setContractDraft({ ...contractDraft, scheduledReviewMinutes: e.target.value ? Number(e.target.value) : null })} /></Field>
@@ -175,12 +188,17 @@ function Organization({ companyId: c }: { companyId: string }) {
     </>}
     {tab === "Timeline" && <>
       <p className="text-sm text-muted-foreground">Append-only company history, including mission changes, receipt exchanges, knowledge provenance, and run outcomes.</p>
-      {events.data?.map(e => <article key={e.id} className="space-y-2 rounded-lg border p-4"><h2 className="font-medium">{e.subject}</h2><p className="text-sm">{e.kind} · {new Date(e.createdAt).toLocaleString()}</p><p className="whitespace-pre-wrap">{e.summary}</p><p className="text-sm text-muted-foreground">{e.actorType}: {e.actorId}{e.causationId ? ` · Caused by ${e.causationId}` : ""}{e.correlationId ? ` · Correlation ${e.correlationId}` : ""}</p>{e.runId && <Button variant="outline" onClick={() => { setRunInput(e.runId!); setRunId(e.runId!); setTab("Run context"); }}>Inspect run context</Button>}</article>)}
+      {events.data?.map(e => <article key={e.id} className="space-y-2 rounded-lg border p-4"><h2 className="font-medium">{e.subject}</h2><p className="text-sm">{e.kind} · {e.origin ?? e.actorType} · {new Date(e.createdAt).toLocaleString()}</p><p className="whitespace-pre-wrap">{e.summary}</p><p className="text-sm text-muted-foreground">{e.actorType}: {e.actorId}{e.causationId ? ` · Caused by ${e.causationId}` : ""}{e.correlationId ? ` · Correlation ${e.correlationId}` : ""}</p>{e.runId && <span>Run {e.runId}</span>}</article>)}
       <div className="flex gap-2"><Button variant="outline" onClick={() => setBefore(undefined)}>Latest</Button><Button variant="outline" disabled={!events.data?.length} onClick={() => setBefore(events.data?.at(-1)?.createdAt)}>Older events</Button></div>
     </>}
     {tab === "Run context" && <>
-      <form className="flex items-end gap-2" onSubmit={e => { e.preventDefault(); setRunId(runInput); }}><Field label="Run ID"><Input required value={runInput} onChange={e => setRunInput(e.target.value)} /></Field><Button>Inspect</Button></form>
+      {!fixedRunId && <form className="flex items-end gap-2" onSubmit={e => { e.preventDefault(); setRunId(runInput); }}><Field label="Run ID"><Input required value={runInput} onChange={e => setRunInput(e.target.value)} /></Field><Button>Inspect</Button></form>}
       {pack.isLoading && <p>Loading context…</p>}{pack.data && <section className="space-y-3"><p>Contract version: {pack.data.contractVersion ?? "None"} · Built {new Date(pack.data.createdAt).toLocaleString()}</p><pre className="overflow-auto whitespace-pre-wrap rounded-lg border p-4 text-sm">{JSON.stringify(pack.data.pack, null, 2)}</pre></section>}
     </>}
   </div>;
+}
+
+export function InboxReceipts() {
+  const [open, setOpen] = useState(false);
+  return <details className="rounded-lg border p-4" onToggle={e => setOpen(e.currentTarget.open)}><summary className="cursor-pointer font-medium">Employee requests and receipts</summary>{open && <OrganizationPanel section="Receipts" />}</details>;
 }

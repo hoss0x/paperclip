@@ -240,7 +240,6 @@ export function Sidebar({ children }: { children?: ReactNode }) {
           {showPipelines ? (
             <SidebarNavItem to="/pipelines" label="Pipelines" icon={GitBranch} />
           ) : null}
-          <SidebarNavItem to="/organization" label="Company OS" icon={Target} />
           {showGoalsLink ? (
             <SidebarNavItem to="/goals" label="Goals" icon={Target} />
           ) : goalsLinkPending ? (

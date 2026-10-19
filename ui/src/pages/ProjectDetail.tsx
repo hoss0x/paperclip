@@ -1,3 +1,4 @@
+import { OrganizationPanel } from "./OrganizationPanels";
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Link, useParams, useNavigate, useLocation, Navigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -48,7 +49,7 @@ import {
 
 /* ── Top-level tab types ── */
 
-type ProjectBaseTab = "list" | "plugin-operations" | "workspaces" | "configuration" | "budget";
+type ProjectBaseTab = "missions" | "knowledge" | "list" | "plugin-operations" | "workspaces" | "configuration" | "budget";
 type ProjectPluginTab = `plugin:${string}`;
 type ProjectTab = ProjectBaseTab | ProjectPluginTab;
 
@@ -61,6 +62,7 @@ function resolveProjectTab(pathname: string, projectId: string): ProjectTab | nu
   const projectsIdx = segments.indexOf("projects");
   if (projectsIdx === -1 || segments[projectsIdx + 1] !== projectId) return null;
   const tab = segments[projectsIdx + 2];
+  if (tab === "missions" || tab === "knowledge") return tab;
   if (tab === "overview") return "configuration";
   if (tab === "configuration") return "configuration";
   if (tab === "budget") return "budget";
@@ -506,6 +508,10 @@ export function ProjectDetail() {
       navigate(`/projects/${canonicalProjectRef}?tab=${encodeURIComponent(activeTab)}`, { replace: true });
       return;
     }
+    if (activeTab === "missions" || activeTab === "knowledge") {
+      navigate(`/projects/${canonicalProjectRef}/${activeTab}`, { replace: true });
+      return;
+    }
     if (activeTab === "configuration") {
       navigate(`/projects/${canonicalProjectRef}/configuration`, { replace: true });
       return;
@@ -701,7 +707,9 @@ export function ProjectDetail() {
       navigate(`/projects/${canonicalProjectRef}?tab=${encodeURIComponent(tab)}`);
       return;
     }
-    if (tab === "workspaces") {
+    if (tab === "missions" || tab === "knowledge") {
+      navigate(`/projects/${canonicalProjectRef}/${tab}`);
+    } else if (tab === "workspaces") {
       navigate(`/projects/${canonicalProjectRef}/workspaces`);
     } else if (tab === "budget") {
       navigate(`/projects/${canonicalProjectRef}/budget`);
@@ -838,6 +846,8 @@ export function ProjectDetail() {
         <PageTabBar
           items={[
             { value: "list", label: "Tasks" },
+            { value: "missions", label: "Missions" },
+            { value: "knowledge", label: "Knowledge" },
 
             ...(project.managedByPlugin ? [{ value: "plugin-operations", label: "Plugin operations" }] : []),
             ...(showWorkspacesTab ? [{ value: "workspaces", label: "Workspaces" }] : []),
@@ -855,6 +865,8 @@ export function ProjectDetail() {
       </Tabs>
 
 
+
+      {(activeTab === "missions" || activeTab === "knowledge") && project?.id && resolvedCompanyId && <OrganizationPanel section={activeTab === "missions" ? "Missions" : "Knowledge"} companyId={resolvedCompanyId} projectId={project.id} />}
 
       {activeTab === "list" && project?.id && resolvedCompanyId && (
         <ProjectIssuesList projectId={project.id} companyId={resolvedCompanyId} />

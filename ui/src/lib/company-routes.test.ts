@@ -7,7 +7,7 @@ import {
 } from "./company-routes";
 
 describe("company routes", () => {
-  it("keeps Company OS navigation scoped to the selected company", () => {
+  it("keeps the retired organization redirect scoped to the selected company", () => {
     expect(isBoardPathWithoutPrefix("/organization")).toBe(true);
     expect(extractCompanyPrefixFromPath("/organization")).toBeNull();
     expect(applyCompanyPrefix("/organization", "PAP")).toBe("/PAP/organization");

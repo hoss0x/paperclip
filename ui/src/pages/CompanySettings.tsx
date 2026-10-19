@@ -1,3 +1,5 @@
+import { organizationPolicySchema, type OrganizationPolicy } from "@paperclipai/shared";
+import { OrganizationPolicyFields } from "../components/OrganizationPolicyFields";
 import { ChangeEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -48,6 +50,8 @@ export function CompanySettings() {
   // General settings local state
   const [companyName, setCompanyName] = useState("");
   const [description, setDescription] = useState("");
+  const [companyMission, setCompanyMission] = useState("");
+  const [organizationPolicy, setOrganizationPolicy] = useState<OrganizationPolicy>(organizationPolicySchema.parse({}));
   const [logoUrl, setLogoUrl] = useState("");
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
   const [governance, setGovernance] = useState<InteractionResolverGovernance>({});
@@ -57,6 +61,8 @@ export function CompanySettings() {
     if (!selectedCompany) return;
     setCompanyName(selectedCompany.name);
     setDescription(selectedCompany.description ?? "");
+    setCompanyMission(selectedCompany.mission ?? "");
+    setOrganizationPolicy(organizationPolicySchema.parse(selectedCompany.organizationPolicy ?? {}));
     setLogoUrl(selectedCompany.logoUrl ?? "");
     setGovernance(selectedCompany.interactionResolverGovernance ?? {});
   }, [selectedCompany]);
@@ -64,12 +70,14 @@ export function CompanySettings() {
   const generalDirty =
     !!selectedCompany &&
     (companyName !== selectedCompany.name ||
-      description !== (selectedCompany.description ?? ""));
+      description !== (selectedCompany.description ?? "") || companyMission !== (selectedCompany.mission ?? "") || JSON.stringify(organizationPolicy) !== JSON.stringify(organizationPolicySchema.parse(selectedCompany.organizationPolicy ?? {})));
 
   const generalMutation = useMutation({
     mutationFn: (data: {
       name: string;
       description: string | null;
+      mission: string | null;
+      organizationPolicy: OrganizationPolicy;
     }) => companiesApi.update(selectedCompanyId!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
@@ -208,6 +216,8 @@ export function CompanySettings() {
   function handleSaveGeneral() {
     generalMutation.mutate({
       name: companyName.trim(),
+      mission: companyMission.trim() || null,
+      organizationPolicy,
       description: description.trim() || null
     });
   }
@@ -239,6 +249,9 @@ export function CompanySettings() {
               </p>
             )}
           </Field>
+          <Field label="Company mission" hint="The long-term purpose of this company, distinct from measurable Goals and operational Missions.">
+            <textarea aria-label="Company mission" className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm" value={companyMission} onChange={e => setCompanyMission(e.target.value)} />
+          </Field>
           <Field
             label="Description"
             hint="Optional description shown in the organization profile."
@@ -253,6 +266,8 @@ export function CompanySettings() {
           </Field>
         </div>
       </div>
+
+      <div className="max-w-2xl"><details><summary className="cursor-pointer font-medium">Organizational action policy</summary><OrganizationPolicyFields value={organizationPolicy} onChange={setOrganizationPolicy} /></details></div>
 
       {/* Appearance */}
       <div className="max-w-2xl space-y-4">

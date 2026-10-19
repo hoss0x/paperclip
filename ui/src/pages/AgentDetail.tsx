@@ -1,3 +1,4 @@
+import { OrganizationPanel } from "./OrganizationPanels";
 import { AgentConnectionInstructions } from "@/features/connections/ConnectionInstructions";
 import type { AgentInstructionCandidate, AgentInstructionsBundle } from "@paperclipai/shared";
 import { InstructionHistory } from "../components/InstructionHistory";
@@ -1395,6 +1396,8 @@ export function AgentDetail() {
           agentRouteId={canonicalAgentRef}
         />
       )}
+
+      {activeView === "contract" && resolvedCompanyId && <OrganizationPanel section="Contracts" companyId={resolvedCompanyId} agentId={agent.id} />}
 
       {activeView === "instructions" && (
         <div><PromptsTab
@@ -3955,6 +3958,8 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
         if (run.status === "failed" || run.status === "timed_out") return null;
         return <SourceResolvedFoldCallout fold={fold} finalizedAt={run.finishedAt} />;
       })()}
+
+      <OrganizationPanel section="Run context" companyId={run.companyId} runId={run.id} />
 
       {/* Log viewer */}
       <LogViewer run={run} adapterType={adapterType} />

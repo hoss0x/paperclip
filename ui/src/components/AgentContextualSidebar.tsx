@@ -28,6 +28,7 @@ import {
 } from "@/pages/agent-detail-navigation";
 
 const localIcons = {
+  contract: ReceiptText,
   overview: Sparkles,
   instructions: BookOpenText,
   skills: Library,

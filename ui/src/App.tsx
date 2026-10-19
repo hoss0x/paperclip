@@ -46,7 +46,6 @@ import { StatusCards } from "./pages/StatusCards";
 import { RoutineDetail } from "./pages/RoutineDetail";
 import { UserProfile } from "./pages/UserProfile";
 import { ExecutionWorkspaceDetail } from "./pages/ExecutionWorkspaceDetail";
-import { CompanyOs } from "./pages/CompanyOs";
 import { Goals } from "./pages/Goals";
 import { Artifacts } from "./pages/Artifacts";
 import { GoalDetail } from "./pages/GoalDetail";
@@ -301,6 +300,8 @@ function boardRoutes(streamlinedUiEnabled: boolean, combinedInboxTasksEnabled: b
       </Route>
       <Route path="projects/:projectId/workspaces" element={<ProjectDetail />} />
       <Route path="projects/:projectId/configuration" element={<ProjectDetail />} />
+      <Route path="projects/:projectId/missions" element={<ProjectDetail />} />
+      <Route path="projects/:projectId/knowledge" element={<ProjectDetail />} />
       <Route path="projects/:projectId/budget" element={<ProjectDetail />} />
       <Route element={<IsolatedWorkspacesRouteGate />}>
         <Route path="workspaces" element={<Workspaces />} />
@@ -396,7 +397,7 @@ function boardRoutes(streamlinedUiEnabled: boolean, combinedInboxTasksEnabled: b
           <Route path="execution-workspaces/:workspaceId/routines" element={<ExecutionWorkspaceDetail />} />
         </Route>
       </Route>
-      <Route path="organization" element={<CompanyOs />} />
+      <Route path="organization" element={<Navigate to="/projects" replace />} />
       <Route path="goals" element={<Goals />} />
       <Route path="goals/:goalId" element={<GoalDetail />} />
       <Route path="artifacts" element={<Artifacts />} />
@@ -876,6 +877,8 @@ export function App() {
           <Route path="projects/:projectId/issues/:filter" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/workspaces" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/workspaces/:workspaceId" element={<UnprefixedBoardRedirect />} />
+          <Route path="projects/:projectId/missions" element={<UnprefixedBoardRedirect />} />
+          <Route path="projects/:projectId/knowledge" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/configuration" element={<UnprefixedBoardRedirect />} />
           <Route path="workspaces" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId" element={<UnprefixedExecutionWorkspaceRedirect />} />

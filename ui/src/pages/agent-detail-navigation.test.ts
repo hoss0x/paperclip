@@ -11,6 +11,7 @@ describe("agent detail navigation", () => {
   it("exposes the complete local information architecture", () => {
     expect(AGENT_DETAIL_NAVIGATION.flatMap((section) => section.items.map((item) => item.value))).toEqual([
       "overview",
+      "contract",
       "instructions",
       "skills",
       "runtime",

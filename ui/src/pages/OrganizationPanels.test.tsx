@@ -4,7 +4,7 @@ import { flushSync } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CompanyOs } from "./CompanyOs";
+import { OrganizationPanel } from "./OrganizationPanels";
 
 vi.mock("../lib/router", async () => ({ Link: (await import("react-router-dom")).Link }));
 
@@ -29,13 +29,13 @@ function fill(label: string, value: string) {
   Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(input, value);
   flushSync(() => input.dispatchEvent(new Event(input.tagName === "SELECT" ? "change" : "input", { bubbles: true })));
 }
-function render() {
+function render(section: "Missions" | "Contracts" = "Missions") {
   const cache = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  flushSync(() => root.render(<QueryClientProvider client={cache}><MemoryRouter><CompanyOs /></MemoryRouter></QueryClientProvider>));
+  flushSync(() => root.render(<QueryClientProvider client={cache}><MemoryRouter><OrganizationPanel section={section} /></MemoryRouter></QueryClientProvider>));
 }
 beforeEach(() => { state.company = "company-a"; state.saveMission.mockReset().mockResolvedValue({}); state.saveContract.mockReset().mockResolvedValue({}); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
 afterEach(() => { flushSync(() => root.unmount()); container.remove(); });
-describe("Company OS board workflow", () => {
+describe("Native organizational editors", () => {
   it("saves a mission with outcome criteria and retains draft on conflict", async () => {
     render(); await until(() => expect(container.textContent).toContain("New mission"));
     flushSync(() => button("New mission").click()); fill("Title", "A clear outcome"); fill("Objective", "Coordinate the team");
@@ -47,7 +47,7 @@ describe("Company OS board workflow", () => {
     expect(state.saveMission).toHaveBeenCalledWith("company-a", null, expect.objectContaining({ title: "A clear outcome", successCriteria: ["First result", "Second result"] }), 0);
   });
   it("edits structured contracts and sends the expected revision", async () => {
-    render(); flushSync(() => button("Contracts").click()); await until(() => expect(container.textContent).toContain("Specialist"));
+    render("Contracts"); await until(() => expect(container.textContent).toContain("Specialist"));
     fill("Employee", "employee-b"); await until(() => expect(container.textContent).toContain("Edit contract"));
     flushSync(() => button("Edit contract").click()); fill("Purpose", "Provide research"); fill("Capabilities (one per line)", "research\nreview");
     flushSync(() => container.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));

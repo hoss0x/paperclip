@@ -1,3 +1,4 @@
+import { OrganizationPanel } from "../OrganizationPanels";
 import { useCallback, useEffect } from "react";
 import { History } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
@@ -124,7 +125,7 @@ export function AuditHub({ section }: { section: AuditSection }) {
       ) : section === "budgets" ? (
         <Costs embedded initialTab="budgets" lockTab />
       ) : section === "timeline" ? (
-        <Timeline embedded />
+        <><Timeline embedded /><OrganizationPanel section="Timeline" companyId={selectedCompanyId} /></>
       ) : (
         <Costs embedded initialTab="overview" hideBudgetsTab />
       )}

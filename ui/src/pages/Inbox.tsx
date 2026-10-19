@@ -1,3 +1,4 @@
+import { InboxReceipts } from "./OrganizationPanels";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -2419,6 +2420,7 @@ function StreamlinedInbox({
       : null;
   return (
     <div className="space-y-6">
+      <InboxReceipts />
       <InboxCollectionToolbar
         streamlined={streamlinedUiEnabled}
         ariaLabel={`${surfaceLabel} controls`}
