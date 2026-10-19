@@ -3,11 +3,12 @@ import express from "express";
 import request from "supertest";
 import { and, eq } from "drizzle-orm";
 import { beforeAll, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDb, companies, agents, goals, projects, issues, heartbeatRuns, contextEvents, organizationDeliveries, organizationReceipts, organizationContextPacks, agentWakeupRequests, type Db } from "@paperclipai/db";
+import { createDb, activityLog, companies, agents, goals, projects, issues, heartbeatRuns, contextEvents, organizationDeliveries, organizationReceipts, organizationContextPacks, agentWakeupRequests, type Db } from "@paperclipai/db";
 import { employeeContractSchema, missionSchema, workstreamSchema, receiptSchema, knowledgeEntitySchema } from "@paperclipai/shared";
 import { startEmbeddedPostgresTestDatabase } from "./helpers/embedded-postgres.js";
 import { companyOsService, boundariesOverlap } from "../services/company-os.js";
 import { compileOrganizationContext, dispatchOrganizationDeliveries, renderOrganizationContext, settleOrganizationRuns, scheduleOrganizationReviews } from "../services/company-os-runtime.js";
+import { ingestOrganizationEvidence } from "../services/organization-evidence.js";
 import { companyOsRoutes } from "../routes/company-os.js";
 import { errorHandler } from "../middleware/error-handler.js";
 
@@ -193,4 +194,92 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     expect(boundariesOverlap({ kind: "territory", resource: "North" }, { kind: "territory", resource: "North" })).toBe(true);
     expect(boundariesOverlap({ kind: "service", resource: "billing", repository: "A" }, { kind: "service", resource: "billing", repository: "B" })).toBe(false);
   });
+  it("enforces restrictive company/contract intersections inside domain transactions", async () => {
+    await svc.saveContract(c, a, { ...contract(), policy: { defaultMode: "allowed", permissions: { "mission.update": "owned_only", "knowledge.write": "denied" } } }, 0, board);
+    const m = await svc.saveMission(c, null, { ...missionInput(), ownerAgentId: b }, 0, board);
+    await expect(svc.saveMission(c, m.id, { ...m.data, ownerAgentId: a }, 1, asAgent(a))).rejects.toMatchObject({ status: 403 });
+    await expect(svc.saveKnowledge(c, null, knowledge("Disallowed", m.id), 0, asAgent(a))).rejects.toMatchObject({ status: 403 });
+    await db.update(companies).set({ organizationPolicy: { defaultMode: "allowed", permissions: { "mission.create": "denied" } } }).where(eq(companies.id, c));
+    await expect(svc.saveMission(c, null, missionInput(), 0, asAgent(a))).rejects.toMatchObject({ status: 403 });
+    await svc.saveContract(c, a, { ...contract(), policy: { defaultMode: "allowed", permissions: { "mission.create": "allowed" } } }, 1, board);
+    await expect(svc.saveMission(c, null, missionInput(), 0, asAgent(a))).rejects.toMatchObject({ status: 403 });
+    expect((await request(app(c, a)).put(`/api/companies/${c}/organization/contracts/${a}`).send({ expectedVersion: 2, contract: contract() })).status).toBe(403);
+  });
+  it("rejects protected event spoofing and records observation authority", async () => {
+    const m = await mission();
+    const observation = { kind: "finding.observed", subject: "Evidence", summary: "Observed fact", missionId: m.id, projectId: projectId, entityIds: [], causationId: null, correlationId: null, metadata: {} };
+    for (const kind of ["mission.started", "mission.completed", "run.completed", "contract.updated", "paperclip.evidence_recorded"]) {
+      expect((await request(app(c, a)).post(`/api/companies/${c}/organization/events`).send({ ...observation, kind })).status).toBe(403);
+    }
+    const e = await svc.appendEvent(c, observation, asAgent(a));
+    expect(e.origin).toBe("employee");
+    expect((await svc.listEvents(c, { missionId: m.id })).find(e => e.kind === "mission.started")?.origin).toBe("system");
+    expect((await request(app(c, a)).post(`/api/companies/${c}/organization/events`).send({ ...observation, origin: "system" })).status).toBe(400);
+  });
+  it("drains a 100-event backlog in deterministic pages and never advances failed runs", async () => {
+    const m = await mission();
+    for (let index = 0; index < 100; index++) await svc.appendEvent(c, { kind: "finding.observed", subject: `Finding ${index}`, summary: "Relevant delta", missionId: m.id, projectId, entityIds: [], causationId: null, correlationId: null, metadata: {} }, board);
+    const failed = await run(a, {}, "failed");
+    const initial = await compileOrganizationContext(db, failed, { organizationMissionId: m.id });
+    expect((initial!.pack.delta as { hasMore: boolean }).hasMore).toBe(true);
+    await settleOrganizationRuns(db);
+    const delivered: string[] = [];
+    let last = 0;
+    for (let index = 0; index < 5; index++) {
+      const r = await run(a, {}, "succeeded");
+      const pack = await compileOrganizationContext(db, r, { organizationMissionId: m.id });
+      const changes = pack!.pack.changes as { id: string; kind: string; sequence: number }[];
+      if (!index) expect(changes.map(e => e.id)).toEqual((initial!.pack.changes as { id: string }[]).map(e => e.id));
+      for (const e of changes) { expect(e.sequence).toBeGreaterThan(last); last = e.sequence; if (e.kind === "finding.observed") delivered.push(e.id); }
+      await settleOrganizationRuns(db);
+    }
+    expect(delivered).toHaveLength(100); expect(new Set(delivered).size).toBe(100);
+  }, 30000);
+  it("includes all linked goals even when another employee owns them", async () => {
+    const [linked, unrelated] = [randomUUID(), randomUUID()];
+    await db.insert(goals).values([{ id: linked, companyId: c, title: "Linked specialist outcome", level: "agent", ownerAgentId: b }, { id: unrelated, companyId: c, title: "Unrelated outcome", level: "agent", ownerAgentId: b }]);
+    const m = await svc.saveMission(c, null, { ...missionInput(), goalIds: [goalId, linked] }, 0, board);
+    await db.update(companies).set({ mission: "Long-term company purpose" }).where(eq(companies.id, c));
+    const pack = await compileOrganizationContext(db, await run(a, {}), { organizationMissionId: m.id });
+    expect(pack!.pack.companyMission).toBe("Long-term company purpose");
+    expect((pack!.pack.goals as { id: string }[]).map(g => g.id)).toEqual(expect.arrayContaining([goalId, linked]));
+    expect(JSON.stringify(pack!.pack.goals)).not.toContain(unrelated);
+  });
+  it("routes to a company specialist outside mission membership and preserves reply ownership", async () => {
+    await svc.saveContract(c, a, { ...contract(["receipt.response_received"]), capabilities: [] }, 0, board);
+    await svc.saveContract(c, b, { ...contract(["receipt.received"]), serviceExposures: [{ capability: "research", scope: "company" }] }, 0, board);
+    const m = await svc.saveMission(c, null, { ...missionInput(), participantAgentIds: [a] }, 0, board);
+    const receipt = await svc.sendReceipt(c, receiptSchema.parse({ missionId: m.id, senderAgentId: a, capability: "research", kind: "investigation_request", subject: "Specialist request", payload: {}, idempotencyKey: randomUUID() }), asAgent(a));
+    expect(receipt.recipientAgentId).toBe(b);
+    expect((await db.select().from(organizationDeliveries).where(eq(organizationDeliveries.receiptId, receipt.id)))).toHaveLength(1);
+    const pack = await compileOrganizationContext(db, await run(b, {}), { organizationReceiptId: receipt.id });
+    expect(pack!.pack.mission).toMatchObject({ id: m.id });
+    await svc.sendReceipt(c, receiptSchema.parse({ missionId: m.id, senderAgentId: b, recipientAgentId: a, parentReceiptId: receipt.id, kind: "result", subject: "Evidence", payload: {}, idempotencyKey: randomUUID() }), asAgent(b));
+    expect((await svc.getMission(c, m.id)).data).toMatchObject({ ownerAgentId: a, participantAgentIds: [a] });
+    const extra = randomUUID(); await db.insert(agents).values({ id: extra, companyId: c, name: "Another provider" });
+    await svc.saveContract(c, extra, { ...contract(), serviceExposures: [{ capability: "research", scope: "company" }] }, 0, board);
+    await expect(svc.sendReceipt(c, receiptSchema.parse({ missionId: m.id, senderAgentId: a, capability: "research", kind: "information_request", subject: "Ambiguous", payload: {}, idempotencyKey: randomUUID() }), asAgent(a))).rejects.toMatchObject({ status: 409 });
+  });
+  it("retrieves old explicit knowledge and its current graph neighborhood before new unrelated records", async () => {
+    const m = await mission();
+    const old = await svc.saveKnowledge(c, null, knowledge("Older relevant evidence", m.id), 0, board);
+    const neighbor = await svc.saveKnowledge(c, null, knowledge("Structural dependency", m.id), 0, board);
+    await svc.addRelationship(c, { sourceId: old.id, targetId: neighbor.id, kind: "DEPENDS_ON", provenance: "Verified", confidence: 1, supersedesId: null, metadata: {} }, board);
+    for (let i = 0; i < 24; i++) await svc.saveKnowledge(c, null, knowledge(`New unrelated ${i}`, null, null), 0, board);
+    await svc.saveMission(c, m.id, { ...m.data, metadata: { entityIds: [old.id] } }, 1, board);
+    const pack = await compileOrganizationContext(db, await run(a, {}), { organizationMissionId: m.id });
+    const ids = (pack!.pack.knowledge as { id: string }[]).map(e => e.id);
+    expect(ids.slice(0, 2)).toEqual(expect.arrayContaining([old.id, neighbor.id]));
+    expect(JSON.stringify(pack!.pack.knowledge)).not.toContain("New unrelated");
+  });
+  it("ingests canonical activity evidence once with trusted origin and source provenance", async () => {
+    const m = await mission();
+    const issueId = randomUUID(); await db.insert(issues).values({ id: issueId, companyId: c, projectId, title: "Evidence-bearing work" });
+    await db.insert(activityLog).values({ companyId: c, actorType: "agent", actorId: a, action: "issue.work_product_created", entityType: "issue", entityId: issueId });
+    await ingestOrganizationEvidence(db); await ingestOrganizationEvidence(db);
+    const events = (await svc.listEvents(c, { missionId: m.id })).filter(e => e.kind === "paperclip.evidence_recorded");
+    expect(events).toHaveLength(1); expect(events[0]).toMatchObject({ origin: "system", metadata: { source: "activity", originalActorId: a } });
+    expect((await svc.listEvents(other)).filter(e => e.kind === "paperclip.evidence_recorded")).toHaveLength(0);
+  });
+
 });

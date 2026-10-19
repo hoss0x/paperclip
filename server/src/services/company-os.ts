@@ -4,6 +4,8 @@ import { agents, companies, goals, projects, executionWorkspaces, employeeContra
   organizationReceipts, contextEvents, knowledgeEntities, knowledgeRelationships, organizationDeliveries,
   organizationContextPacks, organizationContextCursors, heartbeatRuns, type Db } from "@paperclipai/db";
 import type { EmployeeContract, MissionInput, WorkstreamInput, ReceiptInput, ContextEventInput, KnowledgeEntityInput, KnowledgeRelationshipInput, OwnershipBoundary } from "@paperclipai/shared";
+import { reservedOrganizationEventKind } from "@paperclipai/shared";
+import { assertOrganizationPermission } from "./organization-policy.js";
 import { badRequest, conflict, forbidden, notFound } from "../errors.js";
 import { logActivity, publishActivity, type ActivityPublication } from "./activity-log.js";
 
@@ -63,14 +65,14 @@ export function companyOsService(db: Db) {
     const [row] = await reader.select().from(employeeContracts).where(and(eq(employeeContracts.companyId, companyId), eq(employeeContracts.agentId, agentId))).orderBy(desc(employeeContracts.version)).limit(1);
     return row ?? null;
   }
-  async function event(tx: Transaction, publications: ActivityPublication[], companyId: string, actor: OrganizationActor, data: ContextEventInput, direct?: { agentId: string; receiptId: string }) {
+  async function event(tx: Transaction, publications: ActivityPublication[], companyId: string, actor: OrganizationActor, data: ContextEventInput, direct?: { agentId: string; receiptId: string }, origin: "system" | "employee" | "board" | "integration" = "system") {
     if (data.missionId) await one(tx, missions, companyId, data.missionId);
     await validateReferences(tx, companyId, { projectIds: data.projectId ? [data.projectId] : [] });
     if (data.causationId && !(await tx.select().from(contextEvents).where(and(eq(contextEvents.companyId, companyId), eq(contextEvents.id, data.causationId))))[0]) throw badRequest("Cause is not in this company");
     for (const id of data.entityIds) {
       if (!(await tx.select({ id: knowledgeEntities.id }).from(knowledgeEntities).where(and(eq(knowledgeEntities.companyId, companyId), eq(knowledgeEntities.id, id))))[0]) throw badRequest("Knowledge entity is not in this company");
     }
-    const [created] = await tx.insert(contextEvents).values({ ...data, companyId, actorType: actor.actorType, actorId: actor.actorId, runId: actor.runId ?? null }).returning();
+    const [created] = await tx.insert(contextEvents).values({ ...data, companyId, origin, actorType: actor.actorType, actorId: actor.actorId, runId: actor.runId ?? null }).returning();
     await logActivity(tx as unknown as Db, { companyId, ...actor, agentId: actor.actorType === "agent" ? actor.actorId : null, action: data.kind, entityType: "context_event", entityId: created.id,
       details: { subject: data.subject, missionId: data.missionId, causationId: data.causationId } }, publications);
     const contracts = await tx.select().from(employeeContracts).where(eq(employeeContracts.companyId, companyId)).orderBy(desc(employeeContracts.version));
@@ -81,7 +83,7 @@ export function companyOsService(db: Db) {
       visited.add(contract.agentId);
       if (direct && contract.agentId !== direct.agentId) continue;
       if (!direct && actor.actorType === "agent" && contract.agentId === actor.actorId) continue;
-      if (mission && ![mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(contract.agentId)) continue;
+      if (!direct && mission && ![mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(contract.agentId)) continue;
       if (!(contract.contract.eventSubscriptions as string[]).includes(data.kind)) continue;
       await tx.insert(organizationDeliveries).values({ companyId, eventId: created.id, agentId: contract.agentId,
         missionId: data.missionId, receiptId: direct?.receiptId ?? null, reason: data.kind }).onConflictDoNothing();
@@ -100,6 +102,7 @@ export function companyOsService(db: Db) {
     saveContract: (companyId: string, agentId: string, contract: EmployeeContract, expectedVersion: number, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
       if (actor.actorType !== "user") throw forbidden("Board access required to change contracts");
       await checkAgent(tx, companyId, agentId);
+      for (const exposure of contract.serviceExposures ?? []) if (exposure.orgRootAgentId) await checkAgent(tx, companyId, exposure.orgRootAgentId);
       const current = await currentContract(tx, companyId, agentId);
       if ((current?.version ?? 0) !== expectedVersion) throw conflict("Contract changed; reload before saving");
       const [revision] = await tx.insert(employeeContracts).values({ companyId, agentId, version: expectedVersion + 1, contract, actorId: actor.actorId, runId: actor.runId ?? null }).returning();
@@ -111,6 +114,8 @@ export function companyOsService(db: Db) {
     saveMission: (companyId: string, id: string | null, data: MissionInput, expectedVersion: number, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
       await validateReferences(tx, companyId, data);
       const current = id ? await one(tx, missions, companyId, id) : null;
+      await assertOrganizationPermission(tx, companyId, actor, id ? "mission.update" : "mission.create", current?.data ?? data);
+      if (data.status === "completed") await assertOrganizationPermission(tx, companyId, actor, "mission.complete", current?.data ?? data);
       if ((current?.version ?? 0) !== expectedVersion) throw conflict("Mission changed; reload before saving");
       data = { ...data,
         startedAt: data.startedAt ?? (data.status === "active" ? new Date().toISOString() : null),
@@ -135,6 +140,7 @@ export function companyOsService(db: Db) {
       const all = await tx.select().from(missionWorkstreams).where(eq(missionWorkstreams.companyId, companyId));
       const current = id ? all.find(w => w.id === id && w.missionId === missionId) : null;
       if (id && !current) throw notFound("Workstream not found");
+      await assertOrganizationPermission(tx, companyId, actor, id ? "workstream.update" : "workstream.create", current?.data ?? mission.data);
       if ((current?.version ?? 0) !== expectedVersion) throw conflict("Workstream changed; reload before saving");
       for (const dependencyId of data.dependencyIds) {
         const dep = all.find(w => w.id === dependencyId && w.missionId === missionId);
@@ -166,7 +172,12 @@ export function companyOsService(db: Db) {
     sendReceipt: (companyId: string, input: ReceiptInput, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
       assertSelf(actor, input.senderAgentId);
       await checkAgent(tx, companyId, input.senderAgentId);
-      const mission = await requireMissionParticipant(tx, companyId, input.missionId, input.senderAgentId);
+      const mission = await one(tx, missions, companyId, input.missionId);
+      const [replyParent] = input.parentReceiptId ? await tx.select().from(organizationReceipts).where(and(eq(organizationReceipts.companyId, companyId), eq(organizationReceipts.id, input.parentReceiptId))) : [];
+      const replying = replyParent?.missionId === input.missionId && replyParent.recipientAgentId === input.senderAgentId;
+      if (!replying) await requireMissionParticipant(tx, companyId, input.missionId, input.senderAgentId);
+      await assertOrganizationPermission(tx, companyId, actor, "receipt.send", { ...mission.data, assignedAgentId: replying ? input.senderAgentId : undefined });
+      if (input.kind === "decision_request") await assertOrganizationPermission(tx, companyId, actor, "receipt.request_decision", mission.data);
       if (input.projectId && !mission.data.projectIds.includes(input.projectId)) throw badRequest("Receipt project must be linked to the mission");
       const [existing] = await tx.select().from(organizationReceipts).where(and(eq(organizationReceipts.companyId, companyId), eq(organizationReceipts.senderAgentId, input.senderAgentId), eq(organizationReceipts.idempotencyKey, input.idempotencyKey)));
       if (existing) {
@@ -178,17 +189,40 @@ export function companyOsService(db: Db) {
       if (!recipientAgentId) {
         const contracts = await tx.select().from(employeeContracts).where(eq(employeeContracts.companyId, companyId)).orderBy(desc(employeeContracts.version));
         const seen = new Set<string>();
-        const matches = contracts.filter(c => {
+        const advertised = contracts.filter(c => {
           if (seen.has(c.agentId)) return false;
           seen.add(c.agentId);
-          return [...c.contract.capabilities, ...c.contract.servicesProvided].includes(input.capability!) && [mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(c.agentId);
+          return [...c.contract.capabilities, ...c.contract.servicesProvided, ...(c.contract.serviceExposures ?? []).map(e => e.capability)].includes(input.capability!);
         });
-        if (matches.length !== 1) throw conflict("Capability must resolve to exactly one mission employee", { candidates: matches.map(c => c.agentId) });
+        const matches = [];
+        const employees = await tx.select({ id: agents.id, reportsTo: agents.reportsTo }).from(agents).where(eq(agents.companyId, companyId));
+        for (const provider of advertised) {
+          const inMission = [mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(provider.agentId);
+          const exposed = (provider.contract.serviceExposures ?? []).some(exposure => {
+            if (exposure.capability !== input.capability) return false;
+            if (exposure.scope === "company") return true;
+            if (exposure.scope === "mission") return inMission;
+            const root = exposure.orgRootAgentId ?? provider.agentId;
+            let id: string | null = input.senderAgentId;
+            const visited = new Set<string>();
+            while (id && !visited.has(id)) {
+              if (id === root) return true;
+              visited.add(id); id = employees.find(e => e.id === id)?.reportsTo ?? null;
+            }
+            return false;
+          });
+          if (!inMission && !exposed) continue;
+          try { await assertOrganizationPermission(tx, companyId, { actorType: "agent", actorId: provider.agentId }, "receipt.read", { ...mission.data, assignedAgentId: provider.agentId }); }
+          catch (error) { if ((error as { status?: number }).status === 403) continue; throw error; }
+          matches.push(provider);
+        }
+        if (matches.length !== 1) throw conflict("Capability must resolve to exactly one authorized employee", { candidates: matches.map(c => c.agentId) });
         recipientAgentId = matches[0].agentId;
       }
       const recipient = await checkAgent(tx, companyId, recipientAgentId);
       if (["terminated", "pending_approval"].includes(recipient.status)) throw conflict("Recipient is not available");
-      await requireMissionParticipant(tx, companyId, input.missionId, recipientAgentId);
+      if (!input.capability && !replying) await requireMissionParticipant(tx, companyId, input.missionId, recipientAgentId);
+      await assertOrganizationPermission(tx, companyId, { actorType: "agent", actorId: recipientAgentId }, "receipt.read", { ...mission.data, assignedAgentId: recipientAgentId });
       let correlationId: string = randomUUID();
       let causeId: string | null = null;
       if (input.parentReceiptId) {
@@ -208,18 +242,25 @@ export function companyOsService(db: Db) {
       const [receipt] = await tx.select().from(organizationReceipts).where(and(eq(organizationReceipts.companyId, companyId), eq(organizationReceipts.id, id)));
       if (!receipt) throw notFound("Receipt not found");
       assertSelf(actor, receipt.recipientAgentId);
+      await assertOrganizationPermission(tx, companyId, actor, "receipt.acknowledge", { assignedAgentId: receipt.recipientAgentId });
       if (receipt.status !== "sent") return receipt;
       const [updated] = await tx.update(organizationReceipts).set({ status: "acknowledged", acknowledgedAt: new Date() }).where(and(eq(organizationReceipts.companyId, companyId), eq(organizationReceipts.id, id))).returning();
       await event(tx, pubs, companyId, actor, { ...eventData("receipt.acknowledged", receipt.subject, "Receipt acknowledged", receipt.missionId), correlationId: receipt.correlationId });
       return updated;
     }),
-    appendEvent: (companyId: string, data: ContextEventInput, actor: OrganizationActor) => mutate(companyId, actor, (tx, pubs) => event(tx, pubs, companyId, actor, data)),
+    appendEvent: (companyId: string, data: ContextEventInput, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
+      if (reservedOrganizationEventKind(data.kind)) throw forbidden("Lifecycle events are generated only by trusted domain services");
+      const mission = data.missionId ? await one(tx, missions, companyId, data.missionId) : null;
+      await assertOrganizationPermission(tx, companyId, actor, "event.emit", mission?.data);
+      return event(tx, pubs, companyId, actor, data, undefined, actor.actorType === "agent" ? "employee" : actor.actorType === "user" ? "board" : "system");
+    }),
     listEvents: (companyId: string, filter: { missionId?: string; entityId?: string; correlationId?: string; before?: string } = {}) => db.select().from(contextEvents).where(and(eq(contextEvents.companyId, companyId), filter.missionId ? eq(contextEvents.missionId, filter.missionId) : undefined,
       filter.entityId ? sql`${contextEvents.entityIds} @> ${JSON.stringify([filter.entityId])}::jsonb` : undefined, filter.correlationId ? eq(contextEvents.correlationId, filter.correlationId) : undefined,
       filter.before ? sql`${contextEvents.createdAt} < ${filter.before}::timestamptz` : undefined)).orderBy(desc(contextEvents.createdAt), desc(contextEvents.id)).limit(100),
     listKnowledge: (companyId: string, query = "") => db.select().from(knowledgeEntities).where(and(eq(knowledgeEntities.companyId, companyId), query ? sql`(${knowledgeEntities.data}->>'name' ilike ${"%" + query + "%"} or ${knowledgeEntities.data}->>'summary' ilike ${"%" + query + "%"})` : undefined)).orderBy(desc(knowledgeEntities.updatedAt)).limit(200),
     saveKnowledge: (companyId: string, id: string | null, data: KnowledgeEntityInput, expectedVersion: number, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
-      if (data.missionId) await one(tx, missions, companyId, data.missionId);
+      const mission = data.missionId ? await one(tx, missions, companyId, data.missionId) : null;
+      await assertOrganizationPermission(tx, companyId, actor, "knowledge.write", mission?.data);
       await validateReferences(tx, companyId, { projectIds: data.projectId ? [data.projectId] : [] });
       const [current] = id ? await tx.select().from(knowledgeEntities).where(and(eq(knowledgeEntities.companyId, companyId), eq(knowledgeEntities.id, id))) : [];
       if (id && !current) throw notFound("Knowledge entity not found");
@@ -231,6 +272,7 @@ export function companyOsService(db: Db) {
     }),
     listRelationships: (companyId: string, historical = false) => db.select().from(knowledgeRelationships).where(and(eq(knowledgeRelationships.companyId, companyId), historical ? undefined : isNull(knowledgeRelationships.validTo))).orderBy(desc(knowledgeRelationships.validFrom)).limit(500),
     addRelationship: (companyId: string, data: KnowledgeRelationshipInput, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
+      await assertOrganizationPermission(tx, companyId, actor, "knowledge.write");
       const entities = await tx.select().from(knowledgeEntities).where(and(eq(knowledgeEntities.companyId, companyId), inArray(knowledgeEntities.id, [data.sourceId, data.targetId])));
       if (![data.sourceId, data.targetId].every(id => entities.some(e => e.id === id))) throw badRequest("Relationship endpoints must be in this company");
       const now = new Date();

@@ -2,7 +2,7 @@
 
 Company OS extends existing companies, employees (agents), goals, runs, workspaces
 and activity logging. It does not add an execution engine or replace tasks.
-Open **Company OS** in the company sidebar.
+Use the native Agent Contract & services, Project Missions/Knowledge, Inbox receipts, Audit Timeline, and Run context surfaces. The former `/organization` application route redirects to Projects.
 
 ## Operator workflow
 
@@ -143,3 +143,18 @@ the reader while the writer is queued behind it. On hosts with a small thread
 budget, run Vitest directly with one test worker to avoid extra package-manager
 processes. Bound Git index threads only in the test process environment; do not
 change production resource settings.
+
+
+## Native integration correction (2026-10-19)
+
+Company settings owns the long-term Company mission and employee action policy. This purpose is separate from Goals and operational Missions. Structured company and Contract policies intersect normal authorization; they never grant additional Paperclip privileges. Supported restrictions are allowed, denied, owned_only, assigned_only, participant_only and approval_required. The latter fails closed for agents: a board operator reviews and performs the action through the authorized API; an arbitrary approved Issue cannot authorize it. Contract edits remain board-only.
+
+Contracts advertise mission, organization-subtree or company service exposure. Company specialists can receive/reply to a Mission receipt without becoming Mission participants. Receipt recipient identity grants context for that specific service interaction, not unrelated Mission access. Ambiguous eligible providers are rejected.
+
+Context events carry origin and source identity. Reserved domain namespaces cannot be emitted through the observation API. Native state transitions emit system events; employee observations and explicit board observations retain separate origins. Canonical work-product, approval, project-workspace and execution-workspace audit evidence is ingested idempotently with source activity provenance. No deployment or code-change fact is inferred from a URL alone.
+
+Migration0301 adds company mission/policy, event sequence/origin/source identity, and an ordered per-employee Mission cursor. Historical migrations are unchanged. Old ID-set cursors restart at sequence0, so old relevant events may be delivered again rather than silently lost. Each pack records its base and delivered stream position plus backlog indication. Successful runs compare-and-advance only through included events; failed/cancelled runs do not consume a page. Concurrent packs may repeat the same page; their settlement cannot skip an intervening page.
+
+Knowledge context uses a replaceable deterministic retriever: explicit entity IDs and ownership keys, two current-relationship hops, scoped text matching, then Mission-scoped recent updates as fallback. Cross-company and unrelated project scope is excluded. All explicitly linked Mission Goals are included alongside relevant company/employee Goals. Pack budgets still apply; long text has a bounded preview and full records remain accessible through the API.
+
+This correction is not approved for master merge or production deployment. Apply only to isolated development while validation is in progress. For an eventual approved deployment, use the existing backup, matching-build and forward migration workflow. Roll back application code after stopping new organizational runs; retain the additive tables/columns and immutable evidence.

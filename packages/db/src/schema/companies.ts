@@ -7,6 +7,8 @@ export const companies = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
     description: text("description"),
+    mission: text("mission"),
+    organizationPolicy: jsonb("organization_policy").$type<import("@paperclipai/shared").OrganizationPolicy>().notNull().default({ defaultMode: "allowed", permissions: {} }),
     status: text("status").notNull().default("active"),
     pauseReason: text("pause_reason"),
     pausedAt: timestamp("paused_at", { withTimezone: true }),

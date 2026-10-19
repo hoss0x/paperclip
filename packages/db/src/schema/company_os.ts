@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, uuid, text, integer, timestamp, jsonb, index, uniqueIndex, unique, foreignKey } from "drizzle-orm/pg-core";
+import { bigserial, bigint, pgTable, uuid, text, integer, timestamp, jsonb, index, uniqueIndex, unique, foreignKey } from "drizzle-orm/pg-core";
 import type { EmployeeContract, MissionInput, WorkstreamInput, KnowledgeEntityInput } from "@paperclipai/shared";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
@@ -38,11 +38,14 @@ export const organizationReceipts = pgTable("organization_receipts", {
   foreignKey({ columns: [t.companyId, t.senderAgentId], foreignColumns: [agents.companyId, agents.id] }),
   foreignKey({ columns: [t.companyId, t.recipientAgentId], foreignColumns: [agents.companyId, agents.id] })]);
 export const contextEvents = pgTable("context_events", {
+  sequence: bigserial("sequence", { mode: "number" }).notNull(),
+  origin: text("origin").notNull().default("employee"),
+  sourceId: text("source_id"),
   id: uuid("id").primaryKey().defaultRandom(), companyId: companyId(), kind: text("kind").notNull(), subject: text("subject").notNull(), summary: text("summary").notNull(),
   missionId: uuid("mission_id"), projectId: uuid("project_id"), entityIds: jsonb("entity_ids").$type<string[]>().notNull().default([]),
   causationId: uuid("causation_id"), correlationId: uuid("correlation_id"), actorType: text("actor_type").notNull(), actorId: text("actor_id").notNull(),
   runId: uuid("run_id"), metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}), createdAt: createdAt(),
-}, t => [unique("context_events_company_id_uq").on(t.companyId, t.id), index("context_events_scope_idx").on(t.companyId, t.missionId, t.createdAt),
+}, t => [uniqueIndex("context_events_source_uq").on(t.companyId, t.sourceId), index("context_events_stream_idx").on(t.companyId, t.missionId, t.sequence), unique("context_events_company_id_uq").on(t.companyId, t.id), index("context_events_scope_idx").on(t.companyId, t.missionId, t.createdAt),
   foreignKey({ name: "context_event_cause_company_fk", columns: [t.companyId, t.causationId], foreignColumns: [t.companyId, t.id] }),
   index("context_events_cause_idx").on(t.companyId, t.causationId)]);
 export const knowledgeEntities = pgTable("knowledge_entities", {
@@ -76,6 +79,7 @@ export const organizationContextPacks = pgTable("organization_context_packs", {
   foreignKey({ name: "organization_pack_employee_fk", columns: [t.companyId, t.agentId], foreignColumns: [agents.companyId, agents.id] })]);
 export const organizationContextCursors = pgTable("organization_context_cursors", {
   companyId: companyId(), agentId: uuid("agent_id").notNull(), missionId: uuid("mission_id").notNull(),
+  lastSequence: bigint("last_sequence", { mode: "number" }).notNull().default(0),
   seenEventIds: jsonb("seen_event_ids").$type<string[]>().notNull().default([]), updatedAt: updatedAt(),
 }, t => [uniqueIndex("organization_cursor_uq").on(t.companyId, t.agentId, t.missionId),
   foreignKey({ columns: [t.companyId, t.agentId], foreignColumns: [agents.companyId, agents.id] }).onDelete("cascade"),

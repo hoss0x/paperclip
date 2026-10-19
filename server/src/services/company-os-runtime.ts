@@ -2,6 +2,9 @@ import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { agents, companies, goals, missions, missionWorkstreams, employeeContracts, organizationReceipts,
   contextEvents, knowledgeEntities, knowledgeRelationships, organizationDeliveries, organizationContextPacks,
   organizationContextCursors, heartbeatRuns, agentWakeupRequests, issueWorkProducts, type Db } from "@paperclipai/db";
+import { structuredKnowledgeRetriever } from "./organization-knowledge.js";
+import { assertOrganizationPermission } from "./organization-policy.js";
+import { ingestOrganizationEvidence } from "./organization-evidence.js";
 import { companyOsService } from "./company-os.js";
 import { forbidden, notFound } from "../errors.js";
 interface WakeupOptions {
@@ -33,43 +36,53 @@ export async function compileOrganizationContext(db: Db, run: typeof heartbeatRu
   const [existing] = await db.select().from(organizationContextPacks).where(and(eq(organizationContextPacks.companyId, run.companyId), eq(organizationContextPacks.runId, run.id)));
   if (existing) return existing;
   const mission = missionId ? await svc.getMission(run.companyId, missionId) : null;
-  if (mission && ![mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(run.agentId)) throw forbidden("Employee does not participate in this mission");
+  if (mission && !receipt && ![mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(run.agentId)) throw forbidden("Employee does not participate in this mission");
   const projectIds = mission?.data.projectIds ?? [];
   const workstreams = missionId ? (await svc.listWorkstreams(run.companyId, missionId)).filter(w => [w.data.ownerAgentId, ...w.data.participantAgentIds].includes(run.agentId)) : [];
   const [cursor] = missionId ? await db.select().from(organizationContextCursors).where(and(eq(organizationContextCursors.companyId, run.companyId), eq(organizationContextCursors.agentId, run.agentId), eq(organizationContextCursors.missionId, missionId))) : [];
   // Mission deltas stay scoped; the triggering event is supplied separately, including missionless wakes.
-  const events = missionId ? await db.select().from(contextEvents).where(and(eq(contextEvents.companyId, run.companyId), eq(contextEvents.missionId, missionId))).orderBy(desc(contextEvents.createdAt), desc(contextEvents.id)).limit(30) : [];
-  const seen = new Set(cursor?.seenEventIds ?? []);
-  const changes = events.filter(e => !seen.has(e.id));
-  const entities = await db.select().from(knowledgeEntities).where(and(eq(knowledgeEntities.companyId, run.companyId),
-    missionId ? or(sql`${knowledgeEntities.data}->>'missionId' = ${missionId}`,
-      projectIds.length ? sql`${knowledgeEntities.data}->>'projectId' in (${sql.join(projectIds.map(id => sql`${id}`), sql`, `)})` : sql`false`,
-      sql`${knowledgeEntities.data}->>'missionId' is null and ${knowledgeEntities.data}->>'projectId' is null`) : sql`false`)).orderBy(desc(knowledgeEntities.updatedAt)).limit(20);
-  const entityIds = entities.map(e => e.id);
-  const relationships = entityIds.length ? await db.select().from(knowledgeRelationships).where(and(eq(knowledgeRelationships.companyId, run.companyId), isNull(knowledgeRelationships.validTo), inArray(knowledgeRelationships.sourceId, entityIds), inArray(knowledgeRelationships.targetId, entityIds))).limit(30) : [];
-  const employeeGoals = await db.select().from(goals).where(and(eq(goals.companyId, run.companyId), or(eq(goals.ownerAgentId, run.agentId), eq(goals.level, "company")), inArray(goals.status, ["planned", "active"]))).limit(12);
+  const events = missionId ? await db.select().from(contextEvents).where(and(eq(contextEvents.companyId, run.companyId), eq(contextEvents.missionId, missionId), sql`${contextEvents.sequence} > ${cursor?.lastSequence ?? 0}`)).orderBy(asc(contextEvents.sequence)).limit(31) : [];
+  const changes = events.slice(0, 30);
+  let knowledgeAllowed = true;
+  try { await assertOrganizationPermission(db, run.companyId, { actorType: "agent", actorId: run.agentId }, "knowledge.read", { ...mission?.data, assignedAgentId: receipt ? run.agentId : undefined }); }
+  catch (error) { if ((error as { status?: number }).status !== 403) throw error; knowledgeAllowed = false; }
+  const { entities, relationships } = knowledgeAllowed ? await structuredKnowledgeRetriever.retrieve(db, {
+    companyId: run.companyId, agentId: run.agentId, missionId, projectIds,
+    references: [mission?.data.metadata, receipt?.payload, receipt?.metadata, ...workstreams.map(w => w.data), ...changes.map(e => ({ entityIds: e.entityIds }))],
+    query: [mission?.data.title, mission?.data.objective, receipt?.subject, JSON.stringify(receipt?.payload ?? {})].filter(Boolean).join(" "),
+  }) : { entities: [], relationships: [] };
+  const linkedGoals = mission?.data.goalIds.length ? await db.select().from(goals).where(and(eq(goals.companyId, run.companyId), inArray(goals.id, mission.data.goalIds))).orderBy(asc(goals.id)) : [];
+  const otherGoals = await db.select().from(goals).where(and(eq(goals.companyId, run.companyId), or(eq(goals.ownerAgentId, run.agentId), eq(goals.level, "company")), inArray(goals.status, ["planned", "active"]))).orderBy(asc(goals.id)).limit(12);
+  const employeeGoals = [...new Map([...linkedGoals, ...otherGoals].map(g => [g.id, g])).values()];
+  const [company] = await db.select({ mission: companies.mission }).from(companies).where(eq(companies.id, run.companyId));
   const workProducts = projectIds.length ? await db.select({ id: issueWorkProducts.id, title: issueWorkProducts.title, summary: issueWorkProducts.summary, url: issueWorkProducts.url, updatedAt: issueWorkProducts.updatedAt }).from(issueWorkProducts).where(and(eq(issueWorkProducts.companyId, run.companyId), inArray(issueWorkProducts.projectId, projectIds))).orderBy(desc(issueWorkProducts.updatedAt)).limit(5) : [];
   const pack: Record<string, unknown> = {
-    version: 1, wakeReason: context.wakeReason ?? "employee.context", employee: { id: employee.id, name: employee.name, title: employee.title, reportsTo: employee.reportsTo },
-    wakeEvent: wakeEvent ? { id: wakeEvent.id, kind: wakeEvent.kind, subject: wakeEvent.subject, summary: preview(wakeEvent.summary), missionId: wakeEvent.missionId, projectId: wakeEvent.projectId, entityIds: wakeEvent.entityIds, causationId: wakeEvent.causationId, correlationId: wakeEvent.correlationId, createdAt: wakeEvent.createdAt } : null,
+    version: 2, companyMission: company?.mission ?? null, wakeReason: context.wakeReason ?? "employee.context", employee: { id: employee.id, name: employee.name, title: employee.title, reportsTo: employee.reportsTo },
+    wakeEvent: wakeEvent ? { id: wakeEvent.id, kind: wakeEvent.kind, subject: wakeEvent.subject, summary: preview(wakeEvent.summary), missionId: wakeEvent.missionId, projectId: wakeEvent.projectId, entityIds: wakeEvent.entityIds, causationId: wakeEvent.causationId, correlationId: wakeEvent.correlationId, createdAt: wakeEvent.createdAt, origin: wakeEvent.origin } : null,
     contract: contract ? { version: contract.version, ...contract.contract } : null,
-    goals: employeeGoals.map(g => ({ id: g.id, title: g.title, description: preview(g.description ?? "", 1000), level: g.level })),
+    goals: employeeGoals.map(g => ({ id: g.id, title: preview(g.title, 300), description: preview(g.description ?? "", 500), level: g.level })),
     mission: mission ? { id: mission.id, version: mission.version, ...mission.data, roadmap: preview(mission.data.roadmap, 4000), objective: preview(mission.data.objective), summary: preview(mission.data.summary) } : null,
     workstreams: workstreams.slice(0, 10).map(w => ({ id: w.id, version: w.version, title: w.data.title, status: w.data.status, objective: preview(w.data.objective), boundaries: w.data.boundaries, constraints: w.data.constraints })),
     receipt: receipt ? { id: receipt.id, missionId: receipt.missionId, projectId: receipt.projectId, senderAgentId: receipt.senderAgentId, recipientAgentId: receipt.recipientAgentId, kind: receipt.kind, subject: receipt.subject, payload: receipt.payload, status: receipt.status, correlationId: receipt.correlationId, parentReceiptId: receipt.parentReceiptId } : null,
     knowledge: entities.map(e => ({ id: e.id, kind: e.data.kind, name: e.data.name, summary: preview(e.data.summary, 1000), provenance: preview(e.data.provenance, 500), version: e.version })),
-    relationships: relationships.map(r => ({ id: r.id, sourceId: r.sourceId, targetId: r.targetId, kind: r.kind, provenance: preview(r.provenance, 500), validFrom: r.validFrom })), changes: changes.map(e => ({ id: e.id, kind: e.kind, subject: e.subject, summary: preview(e.summary, 1000), causationId: e.causationId, correlationId: e.correlationId, createdAt: e.createdAt })),
+    relationships: relationships.map(r => ({ id: r.id, sourceId: r.sourceId, targetId: r.targetId, kind: r.kind, provenance: preview(r.provenance, 500), validFrom: r.validFrom })), changes: changes.map(e => ({ id: e.id, kind: e.kind, subject: e.subject, summary: preview(e.summary, 1000), causationId: e.causationId, correlationId: e.correlationId, createdAt: e.createdAt, origin: e.origin, sequence: e.sequence })),
+    delta: { afterSequence: cursor?.lastSequence ?? 0, throughSequence: cursor?.lastSequence ?? 0, hasMore: events.length > 30 },
     workProducts, previousContextAt: cursor?.updatedAt ?? null,
     limits: { recentEvents: 30, knowledgeEntities: 20, relationships: 30, workstreams: 10, workProducts: 5, note: "Bounded context. Fetch full records or older history through the company-scoped API when needed." },
   };
   // Bound the whole pack, including user-controlled arrays and relationship metadata.
   // Keep contract, mission and incoming receipt; callers can fetch omitted records.
-  for (const section of ["knowledge", "relationships", "workProducts", "workstreams", "changes", "goals"] as const) {
+  if (JSON.stringify(pack).length > 90000) {
+    pack.goals = (pack.goals as { id: string; title: string; description: string; level: string }[]).map(g => ({ ...g, title: preview(g.title, 120), description: preview(g.description, 100) }));
+  }
+  for (const section of ["knowledge", "relationships", "workProducts", "workstreams", "changes"] as const) {
     const entries = pack[section] as unknown[];
     while (JSON.stringify(pack).length > 100000 && entries.length) entries.pop();
   }
   const includedIds = new Set((pack.knowledge as { id: string }[]).map(e => e.id));
   pack.relationships = (pack.relationships as { sourceId: string; targetId: string }[]).filter(r => includedIds.has(r.sourceId) && includedIds.has(r.targetId));
+  const deliveredChanges = pack.changes as { id: string; sequence: number }[];
+  pack.delta = { afterSequence: cursor?.lastSequence ?? 0, throughSequence: deliveredChanges.at(-1)?.sequence ?? cursor?.lastSequence ?? 0, hasMore: events.length > deliveredChanges.length };
   const includedEventIds = (pack.changes as { id: string }[]).map(e => e.id);
   const [saved] = await db.insert(organizationContextPacks).values({ companyId: run.companyId, agentId: run.agentId, runId: run.id, missionId, contractVersion: contract?.version ?? null, pack, eventIds: includedEventIds }).onConflictDoNothing().returning();
   if (saved) return saved;
@@ -83,6 +96,7 @@ export function renderOrganizationContext(pack: typeof organizationContextPacks.
 type Wake = (agentId: string, options: WakeupOptions) => Promise<unknown>;
 /** Retry-safe bridge into the one existing wake/run engine; no provider execution here. */
 export async function dispatchOrganizationDeliveries(db: Db, wake: Wake) {
+  await ingestOrganizationEvidence(db);
   const now = new Date();
   const pending = await db.select().from(organizationDeliveries).where(and(inArray(organizationDeliveries.status, ["pending", "processing"]), lte(organizationDeliveries.availableAt, now))).orderBy(asc(organizationDeliveries.createdAt)).limit(20);
   let delivered = 0;
@@ -125,12 +139,16 @@ export async function settleOrganizationRuns(db: Db) {
       if (!locked || locked.settledAt) return;
       if (run.status === "succeeded" && pack.missionId) {
         const [cursor] = await tx.select().from(organizationContextCursors).where(and(eq(organizationContextCursors.companyId, pack.companyId), eq(organizationContextCursors.agentId, pack.agentId), eq(organizationContextCursors.missionId, pack.missionId)));
-        const seenEventIds = [...new Set([...(cursor?.seenEventIds ?? []), ...pack.eventIds])].slice(-1000);
-        await tx.insert(organizationContextCursors).values({ companyId: pack.companyId, agentId: pack.agentId, missionId: pack.missionId, seenEventIds }).onConflictDoUpdate({ target: [organizationContextCursors.companyId, organizationContextCursors.agentId, organizationContextCursors.missionId], set: { seenEventIds, updatedAt: new Date() } });
+        const delta = pack.pack.delta as { afterSequence: number; throughSequence: number } | undefined;
+        // Compare-and-advance: overlapping runs cannot skip an unseen earlier page.
+        if (delta && (cursor?.lastSequence ?? 0) === delta.afterSequence) {
+          const seenEventIds = pack.eventIds;
+          await tx.insert(organizationContextCursors).values({ companyId: pack.companyId, agentId: pack.agentId, missionId: pack.missionId, lastSequence: delta.throughSequence, seenEventIds }).onConflictDoUpdate({ target: [organizationContextCursors.companyId, organizationContextCursors.agentId, organizationContextCursors.missionId], set: { lastSequence: delta.throughSequence, seenEventIds, updatedAt: new Date() } });
+        }
       }
       await tx.update(organizationContextPacks).set({ settledAt: new Date() }).where(eq(organizationContextPacks.id, pack.id));
       // Derived evidence: don't make an LLM restate its run outcome, and don't subscribe this completion back into a loop.
-      await tx.insert(contextEvents).values({ companyId: pack.companyId, kind: "run.completed", subject: "Employee run completed", summary: `Run ${run.id}: ${run.status}`, missionId: pack.missionId, actorType: "system", actorId: "company-os", runId: run.id, metadata: { settledPackId: pack.id, status: run.status, contractVersion: pack.contractVersion } });
+      await tx.insert(contextEvents).values({ companyId: pack.companyId, origin: "system", kind: "run.completed", subject: "Employee run completed", summary: `Run ${run.id}: ${run.status}`, missionId: pack.missionId, actorType: "system", actorId: "company-os", runId: run.id, metadata: { settledPackId: pack.id, status: run.status, contractVersion: pack.contractVersion } });
     });
   }
 }
@@ -149,7 +167,7 @@ export async function scheduleOrganizationReviews(db: Db) {
       await tx.select().from(companies).where(eq(companies.id, contract.companyId)).for("update");
       const [last] = await tx.select().from(organizationDeliveries).where(and(eq(organizationDeliveries.companyId, contract.companyId), eq(organizationDeliveries.agentId, contract.agentId), eq(organizationDeliveries.reason, "review.scheduled"))).orderBy(desc(organizationDeliveries.createdAt)).limit(1);
       if (Date.now() - (last?.createdAt ?? contract.createdAt).getTime() < minutes * 60000) return;
-      const [event] = await tx.insert(contextEvents).values({ companyId: contract.companyId, kind: "review.scheduled", subject: "Configured employee review", summary: "Review requested by employee contract schedule", actorType: "system", actorId: "company-os", metadata: { agentId: contract.agentId, contractVersion: contract.version } }).returning();
+      const [event] = await tx.insert(contextEvents).values({ companyId: contract.companyId, origin: "system", kind: "review.scheduled", subject: "Configured employee review", summary: "Review requested by employee contract schedule", actorType: "system", actorId: "company-os", metadata: { agentId: contract.agentId, contractVersion: contract.version } }).returning();
       await tx.insert(organizationDeliveries).values({ companyId: contract.companyId, eventId: event.id, agentId: contract.agentId, reason: event.kind });
     });
   }

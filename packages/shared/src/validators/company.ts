@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { organizationPolicySchema } from "../company-os.js";
 import {
   COMPANY_STATUSES,
   ISSUE_THREAD_INTERACTION_RESOLVER_POLICIES,
@@ -24,6 +25,8 @@ export const interactionResolverGovernanceSchema = z.object({
 export const createCompanySchema = z.object({
   name: z.string().min(1),
   description: z.string().optional().nullable(),
+  mission: z.string().max(10000).nullable().optional(),
+  organizationPolicy: organizationPolicySchema.optional(),
   budgetMonthlyCents: z.number().int().nonnegative().optional().default(0),
   defaultResponsibleUserId: z.string().min(1).nullable().optional(),
 });

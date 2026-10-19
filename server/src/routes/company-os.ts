@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { saveEmployeeContractSchema, missionSchema, workstreamSchema, receiptSchema, contextEventSchema, knowledgeEntitySchema, knowledgeRelationshipSchema } from "@paperclipai/shared";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertOrganizationPermission } from "../services/organization-policy.js";
 import { companyOsService } from "../services/company-os.js";
 
 const id = z.string().uuid();
@@ -16,6 +17,13 @@ export function companyOsRoutes(db: Db) {
   const company = (req: { params: Record<string, unknown> }) => id.parse(req.params.companyId);
   const resourceId = (req: { params: Record<string, unknown> }) => id.parse(req.params.id);
   router.use((req, _res, next) => { assertCompanyAccess(req, company(req)); next(); });
+  router.use(async (req, _res, next) => {
+    if (req.method === "GET") {
+      const action = req.path.startsWith("/knowledge") || req.path.startsWith("/relationships") ? "knowledge.read" : req.path.startsWith("/events") ? "event.read" : req.path.startsWith("/receipts") ? "receipt.read" : req.path.startsWith("/context-packs") ? "context.read" : "mission.read";
+      await assertOrganizationPermission(db, company(req), getActorInfo(req), action);
+    }
+    next();
+  });
   router.get("/contracts/:id", async (req, res) => { res.json(await svc.currentContract(company(req), resourceId(req))); });
   router.get("/contracts/:id/history", async (req, res) => { res.json(await svc.contractHistory(company(req), resourceId(req))); });
   router.put("/contracts/:id", async (req, res) => {

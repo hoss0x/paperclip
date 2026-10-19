@@ -7,7 +7,22 @@ const lines = z.array(z.string().trim().min(1).max(2000)).max(100);
 const ids = z.array(id).max(100).refine(v => new Set(v).size === v.length, "Duplicate IDs");
 const metadata = z.record(z.string().max(100), z.unknown()).refine(v => JSON.stringify(v).length <= 20000, "Metadata too large");
 export const organizationEventKinds = ["mission.started", "mission.updated", "mission.completed", "mission.stalled", "receipt.received", "receipt.response_received", "decision.requested", "employee.escalation", "context.created", "goal.at_risk", "review.requested", "review.scheduled", "workstream.updated", "knowledge.updated", "run.completed", "contract.updated"] as const;
+// Restrictions intersect company authorization; these are never privilege grants.
+export const organizationPolicyModes = ["allowed", "denied", "assigned_only", "owned_only", "participant_only", "approval_required"] as const;
+export const organizationActions = ["mission.read", "mission.create", "mission.update", "mission.complete", "workstream.create", "workstream.update", "receipt.read", "receipt.send", "receipt.request_decision", "receipt.acknowledge", "knowledge.read", "knowledge.write", "event.read", "event.emit", "context.read"] as const;
+export const organizationPolicySchema = z.object({
+  defaultMode: z.enum(["allowed", "denied"]).default("allowed"),
+  permissions: z.partialRecord(z.enum(organizationActions), z.enum(organizationPolicyModes)).default({}),
+}).strict();
+export type OrganizationPolicy = z.infer<typeof organizationPolicySchema>;
+export const serviceExposureSchema = z.object({
+  capability: short, scope: z.enum(["mission", "org_subtree", "company"]),
+  orgRootAgentId: id.optional(),
+}).strict();
+export const reservedOrganizationEventKind = (kind: string) => /^(mission|workstream|receipt|run|contract|knowledge|review|decision|employee|paperclip)\./.test(kind);
 export const employeeContractSchema = z.object({
+  policy: organizationPolicySchema.default({ defaultMode: "allowed", permissions: {} }),
+  serviceExposures: z.array(serviceExposureSchema).max(100).default([]),
   purpose: text.default(""), mission: text.default(""), responsibilities: lines.default([]),
   expectedOutcomes: lines.default([]), authority: lines.default([]), prohibitedActions: lines.default([]),
   capabilities: lines.default([]), servicesProvided: lines.default([]), servicesConsumed: lines.default([]),
@@ -63,6 +78,6 @@ export type Mission = OrganizationRecord<MissionInput>;
 export type Workstream = OrganizationRecord<WorkstreamInput> & { missionId: string };
 export interface ContractRevision { id: string; companyId: string; agentId: string; version: number; contract: EmployeeContract; createdAt: string; actorId: string; runId: string | null }
 export interface Receipt extends ReceiptInput { id: string; companyId: string; recipientAgentId: string; correlationId: string; status: string; acknowledgedAt: string | null; resolvedAt: string | null; createdAt: string }
-export interface ContextEvent extends ContextEventInput { id: string; companyId: string; actorType: string; actorId: string; runId: string | null; createdAt: string }
+export interface ContextEvent extends ContextEventInput { origin?: "system" | "employee" | "board" | "integration"; sourceId?: string | null; id: string; companyId: string; actorType: string; actorId: string; runId: string | null; createdAt: string }
 export type KnowledgeEntity = OrganizationRecord<KnowledgeEntityInput>;
 export interface KnowledgeRelationship extends KnowledgeRelationshipInput { id: string; companyId: string; validFrom: string; validTo: string | null }

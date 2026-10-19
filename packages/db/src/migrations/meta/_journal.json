@@ -2094,6 +2094,13 @@
       "when": 1792163198091,
       "tag": "0300_huge_stephen_strange",
       "breakpoints": true
+    },
+    {
+      "idx": 301,
+      "version": "7",
+      "when": 1792420620219,
+      "tag": "0301_gorgeous_longshot",
+      "breakpoints": true
     }
   ]
 }

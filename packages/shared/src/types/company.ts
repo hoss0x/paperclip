@@ -18,6 +18,8 @@ export interface Company {
   id: string;
   name: string;
   description: string | null;
+  mission?: string | null;
+  organizationPolicy?: import("../company-os.js").OrganizationPolicy;
   status: CompanyStatus;
   pauseReason: PauseReason | null;
   pausedAt: Date | null;

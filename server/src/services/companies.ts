@@ -143,6 +143,8 @@ export function companyService(db: Db) {
     id: companies.id,
     name: companies.name,
     description: companies.description,
+    mission: companies.mission,
+    organizationPolicy: companies.organizationPolicy,
     status: companies.status,
     issuePrefix: companies.issuePrefix,
     issueCounter: companies.issueCounter,
