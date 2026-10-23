@@ -1,5 +1,5 @@
 import { and, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
-import { agents, contextEvents, heartbeatRuns, missions, organizationContextPacks, issues, issueWorkProducts, type Db } from "@paperclipai/db";
+import { agents, contextEvents, heartbeatRuns, missions, organizationContextPacks, issues, issueWorkProducts, activityLog, type Db } from "@paperclipai/db";
 import { normalizeRunUsage } from "./work-timeline.js";
 import type { OperationsTimelineEntry, OperationsTimelineQuery } from "@paperclipai/shared";
 
@@ -42,12 +42,14 @@ export async function readOperationsTimeline(db: Db, companyId: string, query: O
   }[query.category] : undefined;
   const events = await db.select({ event: contextEvents, at: sql<string>`to_char(${contextEvents.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`, agentName: agents.name,
     runAgentId: heartbeatRuns.agentId, status: heartbeatRuns.status, workProductTitle: issueWorkProducts.title,
+    workProductId: sql<string | null>`coalesce(${contextEvents.metadata}->>'workProductId', ${activityLog.details}->>'workProductId')`,
     missionName: sql<string | null>`${missions.data}->>'title'` })
     .from(contextEvents)
     .leftJoin(heartbeatRuns, and(eq(heartbeatRuns.id, contextEvents.runId), eq(heartbeatRuns.companyId, companyId)))
     .leftJoin(agents, and(eq(agents.companyId, companyId), sql`${agents.id}::text = coalesce(${heartbeatRuns.agentId}::text, case when ${contextEvents.actorType} = 'agent' then ${contextEvents.actorId} end)`))
     .leftJoin(missions, and(eq(missions.companyId, companyId), eq(missions.id, contextEvents.missionId)))
-    .leftJoin(issueWorkProducts, and(eq(issueWorkProducts.companyId, companyId), sql`${issueWorkProducts.id}::text = ${contextEvents.metadata}->>'workProductId'`))
+    .leftJoin(activityLog, and(eq(activityLog.companyId, companyId), sql`${activityLog.id}::text = ${contextEvents.metadata}->>'activityId'`))
+    .leftJoin(issueWorkProducts, and(eq(issueWorkProducts.companyId, companyId), sql`${issueWorkProducts.id}::text = coalesce(${contextEvents.metadata}->>'workProductId', ${activityLog.details}->>'workProductId')`))
     .where(and(eq(contextEvents.companyId, companyId), gte(contextEvents.createdAt, new Date(query.from)), lte(contextEvents.createdAt, new Date(query.to)), before(contextEvents),
       // Completion rows are canonical evidence attached to their Run card,
       // never a second usage-bearing Run entry.
@@ -63,9 +65,9 @@ export async function readOperationsTimeline(db: Db, companyId: string, query: O
       missionId: r.missionId, missionName: r.missionName, projectId: r.projectId, runId: r.id, status: r.status,
       summary: r.wakeReason ?? r.trigger, usage: normalizeRunUsage(r.usage, r.adapter),
       details: { startedAt: r.startedAt, finishedAt: r.finishedAt, trigger: r.trigger, wakeReason: r.wakeReason, receiptId: r.receiptId, issueId: r.issueId, contextPackId: r.packId, adapter: r.adapter, costUsd: r.cost } })),
-    ...events.map(({ event: e, at, agentName, runAgentId, status, missionName, workProductTitle }) => ({ id: e.id, source: "event" as const, at, title: typeof e.metadata.action === "string" ? `${e.metadata.action.replaceAll(".", " ").replaceAll("_", " ")}${workProductTitle ? `: ${workProductTitle}` : ""}` : e.subject, category: eventCategory(e.kind, e.metadata), agentId: runAgentId ?? (e.actorType === "agent" ? e.actorId : null), agentName: agentName ?? (e.actorType === "user" ? "Board" : "System"),
+    ...events.map(({ event: e, at, agentName, runAgentId, status, missionName, workProductTitle, workProductId }) => ({ id: e.id, source: "event" as const, at, title: typeof e.metadata.action === "string" ? `${e.metadata.action.replaceAll(".", " ").replaceAll("_", " ")}${workProductTitle ? `: ${workProductTitle}` : ""}` : e.subject, category: eventCategory(e.kind, e.metadata), agentId: runAgentId ?? (e.actorType === "agent" ? e.actorId : null), agentName: agentName ?? (e.actorType === "user" ? "Board" : "System"),
       missionId: e.missionId, missionName, projectId: e.projectId, runId: e.runId, status, summary: e.summary, usage: null,
-      details: { kind: e.kind, origin: e.origin, sourceId: e.sourceId, correlationId: e.correlationId, causationId: e.causationId, entityIds: e.entityIds, metadata: e.metadata } })),
+      details: { workProductId, workProductTitle, kind: e.kind, origin: e.origin, sourceId: e.sourceId, correlationId: e.correlationId, causationId: e.causationId, entityIds: e.entityIds, metadata: e.metadata } })),
   ].sort((a,b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
   const page = entries.slice(0,limit), last = page.at(-1);
   return { entries: page, next: entries.length > limit && last ? { beforeAt: last.at, beforeId: last.id } : null };

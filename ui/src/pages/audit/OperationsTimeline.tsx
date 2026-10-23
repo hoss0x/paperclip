@@ -15,10 +15,10 @@ export function groupTimelineEvidence(entries: OperationsTimelineEntry[]) {
   const grouped = new Map<string, OperationsTimelineEntry[]>();
   for (const entry of entries) {
     const metadata = entry.details.metadata as Record<string, unknown> | undefined;
-    const key = entry.source === "event" && typeof metadata?.activityId === "string" ? `activity:${metadata.activityId}` : `${entry.source}:${entry.id}`;
+    const key = entry.source === "event" && entry.runId && typeof entry.details.workProductId === "string" ? `run:${entry.runId}:product:${entry.details.workProductId}` : entry.source === "event" && typeof metadata?.activityId === "string" ? `activity:${metadata.activityId}` : `${entry.source}:${entry.id}`;
     grouped.set(key, [...(grouped.get(key) ?? []),entry]);
   }
-  return Array.from(grouped.values()).map(records => records.length === 1 ? records[0] : ({ ...records[0], details: { ...records[0].details, scopeProjections: records.map(r => ({ id:r.id, missionId:r.missionId, sourceId:r.details.sourceId })) } }));
+  return Array.from(grouped.values()).map(records => records.length === 1 ? records[0] : ({ ...records[0], details: { ...records[0].details, scopeProjections: records.map(r => ({ id:r.id, at:r.at, title:r.title, missionId:r.missionId, sourceId:r.details.sourceId, metadata:r.details.metadata })) } }));
 }
 const selectClass = "rounded-md border border-input bg-background px-3 py-2 text-sm";
 const dateInput = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0,16);
@@ -78,7 +78,7 @@ export function OperationsTimeline({ companyId }: { companyId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium">{e.title}</span><time className="font-mono text-sm">{new Date(e.at).toLocaleString()}</time></div>
       <p className="text-sm text-muted-foreground">{e.agentName} · {e.category}{e.status ? ` · ${e.status}` : ""}{e.missionName ? ` · ${e.missionName}` : ""}</p>
       {density !== "compact" && <p className="whitespace-pre-wrap text-sm">{e.summary}</p>}
-      {Array.isArray(e.details.scopeProjections) && <p className="text-sm text-muted-foreground">One source activity · {e.details.scopeProjections.length} scope records preserved</p>}
+      {Array.isArray(e.details.scopeProjections) && <p className="text-sm text-muted-foreground">Related evidence · {e.details.scopeProjections.length} original records preserved</p>}
       {e.usage && <p className="font-mono text-sm">{e.usage.totalTokens.toLocaleString()} tokens · {e.usage.cachedInputTokens.toLocaleString()} cached input{typeof e.details.costUsd === "number" ? ` · $${e.details.costUsd.toFixed(4)}` : " · cost not reported"}</p>}
     </button>)}</section>)}
     <div className="flex items-center justify-between"><Button variant="outline" disabled={!cursor} onClick={() => setCursor(null)}>Latest in range</Button><Button variant="outline" disabled={!page.data?.next} onClick={() => setCursor(page.data?.next ?? null)}>Older records</Button></div>

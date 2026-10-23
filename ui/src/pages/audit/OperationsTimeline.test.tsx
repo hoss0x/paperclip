@@ -33,3 +33,9 @@ it("includes newly created records through the selected end minute", () => {
  expect(Date.parse(query.to)).toBeGreaterThan(now.getTime());
  expect(new Date(query.to).getSeconds()).toBe(59);
 });
+
+it("groups repeated work-product evidence for a recorded Run while preserving separate activity IDs", () => {
+ const base = { id:"one",source:"event" as const,runId:"run",details:{workProductId:"product",metadata:{activityId:"first"},sourceId:"activity:first"} };
+ const grouped = groupTimelineEvidence([base,{...base,id:"two",details:{...base.details,metadata:{activityId:"second"},sourceId:"activity:second"}}] as any);
+ expect(grouped).toHaveLength(1);expect(grouped[0].details.scopeProjections).toMatchObject([{id:"one",sourceId:"activity:first"},{id:"two",sourceId:"activity:second"}]);
+});

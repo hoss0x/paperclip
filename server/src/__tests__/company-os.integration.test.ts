@@ -345,6 +345,11 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     expect(events).toHaveLength(2);
     expect(new Set(events.map(e => e.sourceId)).size).toBe(2);
     for (const e of events) expect(e).toMatchObject({ origin: "system", metadata: { source: "activity", originalActorId: a, workProductId } });
+    const legacy = events[0];
+    await db.update(contextEvents).set({metadata:{...legacy.metadata,workProductId:null}}).where(eq(contextEvents.id,legacy.id));
+    const projected = await readOperationsTimeline(db,c,{from:new Date(Date.now()-60000).toISOString(),to:new Date(Date.now()+60000).toISOString(),missionId:m.id,category:"Issues / Tasks"});
+    expect(projected.entries.find(e => e.id === legacy.id)?.details.workProductId).toBe(workProductId);
+
     expect((await svc.listEvents(other)).filter(e => e.kind === "paperclip.evidence_recorded")).toHaveLength(0);
   });
 

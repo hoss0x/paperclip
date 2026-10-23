@@ -5,7 +5,9 @@ import { expect, test } from "@playwright/test";
 
 // Uses the standard throwaway local_trusted instance. Never points at production.
 test("board creates employees, role charters, a mission, ownership and a receipt without tasks", async ({ page, request }) => {
-  test.setTimeout(120000);
+  // This review now also exercises populated Knowledge, permissions, Timeline
+  // filtering/detail and mobile screenshots; product deadlines are unchanged.
+  test.setTimeout(180000);
   page.on("pageerror", error => console.error("Native organization browser error:", error.message));
   await page.addLocatorHandler(page.getByRole("button", { name: "Dismiss announcement", exact: true }), async button => { await button.click(); });
   const live = process.env.PAPERCLIP_COMPANY_OS_LIVE === "1";
@@ -161,7 +163,7 @@ test("board creates employees, role charters, a mission, ownership and a receipt
   await expect(page.getByRole("heading", { name: "Operations Timeline", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /Produce a verified recommendation/ }).first()).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("operations-timeline.png"), fullPage: true });
-  await page.getByLabel("Category", { exact: true }).selectOption("Receipts");
+  await page.getByRole("combobox", { name: "Category", exact: true }).selectOption("Receipts");
   await expect(page.getByText("Investigate the evidence", { exact: true }).first()).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("timeline-receipts.png"), fullPage: true });
   await page.getByRole("button", { name: /Investigate the evidence/ }).first().click();
