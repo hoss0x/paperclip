@@ -1,3 +1,4 @@
+import { captureEmployeeCharter } from "./employee-charter-provenance.js";
 import { compileOrganizationContext, renderOrganizationContext } from "./company-os-runtime.js";
 import { executeWithResourceGovernance, cancelQueuedResourceExecution, ExecutionResourceLimitError, stopRecordedLegacyExecutionUnits, resourceSafeAdapterEventType } from "./execution-resources.js";
 import { retryIdempotentDatabaseOperation } from "../database-retry.js";
@@ -20575,11 +20576,7 @@ export function heartbeatService(
       }
       const runtime = await ensureRuntimeState(agent);
       const context = parseObject(run.contextSnapshot);
-      const organizationPack = await compileOrganizationContext(db, run, context);
-      if (organizationPack) {
-        context.organizationContextPackId = organizationPack.id;
-        context.organizationContextMarkdown = renderOrganizationContext(organizationPack, Boolean(context.issueId));
-      }
+
 
       const authorizeFailedChatRetryExecution = () =>
         db.transaction((tx) =>
@@ -23666,6 +23663,15 @@ export function heartbeatService(
               context[key] = [readNonEmptyString(context[key]), guidance].filter(Boolean).join("\n\n");
             }
           }
+        }
+        // Compile only after the effective instruction copy is staged. Its exact
+        // bytes are immutable audit evidence, never another model prompt copy.
+        const charter = await captureEmployeeCharter(db, run.companyId, run.agentId,
+          readNonEmptyString(runtimeConfig.instructionsFilePath));
+        const organizationPack = await compileOrganizationContext(db, run, context, charter);
+        if (organizationPack) {
+          context.organizationContextPackId = organizationPack.id;
+          context.organizationContextMarkdown = renderOrganizationContext(organizationPack, Boolean(context.issueId));
         }
         let nativeExecution: NativeExecutionInput | null = null;
         let getNativeFreshSessionHandoff: (() => Promise<string | null>) | undefined;

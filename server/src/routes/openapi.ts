@@ -20,7 +20,8 @@ import {
   browserUseViewerSchema,
   slackToolCallSchema,
   slackSearchConfigSchema,
-  saveEmployeeContractSchema,
+  operationsTimelineQuerySchema,
+  saveEmployeeOrganizationConfigSchema,
   missionSchema,
   workstreamSchema,
   receiptSchema,
@@ -1358,7 +1359,7 @@ const browserUseOperations = [
 ] as const;
 
 const BOARD_ONLY_OPERATIONS = new Set([
-  "PUT /api/companies/{companyId}/organization/contracts/{id}",
+  "PUT /api/companies/{companyId}/organization/employee-settings/{id}",
   "POST /api/agents/{agentId}/avatar",
   "DELETE /api/agents/{agentId}/avatar",
   ...browserUseOperations.map(([method, path]) => `${method.toUpperCase()} ${path}`),
@@ -4719,9 +4720,9 @@ const organizationOperations: Array<{
   body?: OpenApiSchema;
   query?: OpenApiSchema;
 }> = [
-  { method: "get", path: "/contracts/{id}", summary: "Get the current employee contract" },
-  { method: "get", path: "/contracts/{id}/history", summary: "List employee contract revisions" },
-  { method: "put", path: "/contracts/{id}", summary: "Save an employee contract revision", body: saveEmployeeContractSchema },
+  { method: "get", path: "/operations-timeline", summary: "Read operational history with canonical Run usage", query: operationsTimelineQuerySchema },
+  { method: "get", path: "/employee-settings/{id}", summary: "Get employee machine settings" },
+  { method: "put", path: "/employee-settings/{id}", summary: "Update employee machine settings", body: saveEmployeeOrganizationConfigSchema },
   { method: "get", path: "/missions", summary: "List company missions" },
   { method: "get", path: "/missions/{id}", summary: "Get a mission" },
   { method: "post", path: "/missions", summary: "Create a mission", body: missionSchema },

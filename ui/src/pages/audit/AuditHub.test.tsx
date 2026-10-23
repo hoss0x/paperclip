@@ -27,9 +27,7 @@ vi.mock("@/lib/router", () => ({
   useSearchParams: () => [new URLSearchParams(currentSearch), setSearchParamsMock],
 }));
 
-vi.mock("../OrganizationPanels", () => ({
-  OrganizationPanel: ({ section, companyId }: { section: string; companyId: string }) => <div data-testid="operational-context" data-section={section} data-company={companyId} />,
-}));
+vi.mock("./OperationsTimeline", () => ({ OperationsTimeline: ({ companyId }: { companyId: string }) => <div data-testid="operations-timeline" data-company={companyId} /> }));
 
 vi.mock("./AuditFeed", () => ({
   AuditFeed: (props: Record<string, unknown>) => (
@@ -141,10 +139,8 @@ describe("AuditHub", () => {
     const labels = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'))
       .map((tab) => tab.textContent?.trim());
     expect(labels).toEqual(["Activity", "Runs", "Costs", "Budgets", "Timeline"]);
-    expect(container.querySelector<HTMLElement>('[data-testid="audit-timeline"]')?.dataset.embedded)
-      .toBe("true");
-    expect(container.querySelector<HTMLElement>('[data-testid="operational-context"]')?.dataset.section).toBe("Timeline");
-    expect(container.querySelector<HTMLElement>('[data-testid="operational-context"]')?.dataset.company).toBe("company-1");
+    expect(container.querySelector<HTMLElement>('[data-testid="operations-timeline"]')?.dataset.company).toBe("company-1");
+    expect(container.querySelector('[data-testid="audit-timeline"]')).toBeNull();
   });
 
   it("renders Costs and Budgets as intentional peer sections", () => {

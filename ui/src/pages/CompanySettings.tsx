@@ -249,7 +249,7 @@ export function CompanySettings() {
               </p>
             )}
           </Field>
-          <Field label="Company mission" hint="The long-term purpose of this company, distinct from measurable Goals and operational Missions.">
+          <Field label="Company mission" hint="Why the company exists over the long term. Organization and employee Goals describe measurable outcomes; Project Missions coordinate active work toward those Goals.">
             <textarea aria-label="Company mission" className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm" value={companyMission} onChange={e => setCompanyMission(e.target.value)} />
           </Field>
           <Field

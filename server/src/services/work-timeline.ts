@@ -140,7 +140,7 @@ function readUsageToken(source: Record<string, unknown>, ...keys: string[]) {
   return 0;
 }
 
-function normalizeRunUsage(usageJson: unknown): RunUsage | null {
+export function normalizeRunUsage(usageJson: unknown, adapterType?: string | null): RunUsage | null {
   if (!usageJson || typeof usageJson !== "object" || Array.isArray(usageJson)) return null;
   const source = usageJson as Record<string, unknown>;
   const inputTokens = readUsageToken(source, "inputTokens", "input_tokens", "rawInputTokens", "raw_input_tokens");
@@ -152,7 +152,10 @@ function normalizeRunUsage(usageJson: unknown): RunUsage | null {
     "cache_read_input_tokens",
   );
   const outputTokens = readUsageToken(source, "outputTokens", "output_tokens", "rawOutputTokens", "raw_output_tokens");
-  const totalTokens = inputTokens + cachedInputTokens + outputTokens;
+  // Codex input_tokens already includes cached_input_tokens. Other adapters
+  // (Claude/OpenCode/Antigravity) report cache reads separately. Never count
+  // the cache subset twice; retain it as a breakdown for inspection.
+  const totalTokens = inputTokens + outputTokens + (adapterType === "codex_local" ? 0 : cachedInputTokens);
   return totalTokens > 0 ? { inputTokens, cachedInputTokens, outputTokens, totalTokens } : null;
 }
 
@@ -546,6 +549,7 @@ export function workTimelineService(db: Db) {
           continuationAttempt: heartbeatRuns.continuationAttempt,
           invocationSource: heartbeatRuns.invocationSource,
           usageJson: heartbeatRuns.usageJson,
+          adapterType: sql<string | null>`coalesce(${heartbeatRuns.runnerProfileJson}->>'adapterType', (select ${agents.adapterType} from ${agents} where ${agents.id} = ${heartbeatRuns.agentId} and ${agents.companyId} = ${heartbeatRuns.companyId}))`,
         })
         .from(heartbeatRuns)
         .where(
@@ -568,6 +572,7 @@ export function workTimelineService(db: Db) {
           continuationAttempt: heartbeatRuns.continuationAttempt,
           invocationSource: heartbeatRuns.invocationSource,
           usageJson: heartbeatRuns.usageJson,
+          adapterType: sql<string | null>`coalesce(${heartbeatRuns.runnerProfileJson}->>'adapterType', (select ${agents.adapterType} from ${agents} where ${agents.id} = ${heartbeatRuns.agentId} and ${agents.companyId} = ${heartbeatRuns.companyId}))`,
         })
         .from(activityLog)
         .innerJoin(heartbeatRuns, eq(activityLog.runId, heartbeatRuns.id))
@@ -678,7 +683,7 @@ export function workTimelineService(db: Db) {
         retryOfRunId: row.retryOfRunId ?? null,
         continuationAttempt: row.continuationAttempt,
         invocationSource: row.invocationSource ?? null,
-        usage: normalizeRunUsage(row.usageJson),
+        usage: normalizeRunUsage(row.usageJson, row.adapterType),
       });
     }
 

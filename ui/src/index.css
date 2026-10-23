@@ -3441,3 +3441,11 @@ span.paperclip-mention-chip[data-mention-kind="external-object"] {
   .org-agent-portrait { transition: none; transform: none !important; }
 }
 .org-chart-connector { stroke-width: var(--org-connector-width); }
+
+@theme {
+  --max-height-dialog: 85dvh;
+}
+
+@utility max-h-dialog {
+  max-height: var(--max-height-dialog);
+}

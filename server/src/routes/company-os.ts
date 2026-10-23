@@ -1,7 +1,8 @@
+import { readOperationsTimeline } from "../services/operations-timeline.js";
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { saveEmployeeContractSchema, missionSchema, workstreamSchema, receiptSchema, contextEventSchema, knowledgeEntitySchema, knowledgeRelationshipSchema } from "@paperclipai/shared";
+import { operationsTimelineQuerySchema, saveEmployeeOrganizationConfigSchema, missionSchema, workstreamSchema, receiptSchema, contextEventSchema, knowledgeEntitySchema, knowledgeRelationshipSchema } from "@paperclipai/shared";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { assertOrganizationPermission, type PolicyScope } from "../services/organization-policy.js";
 import { companyOsService } from "../services/company-os.js";
@@ -26,7 +27,7 @@ export function companyOsRoutes(db: Db) {
       const missionMatch = req.path.match(/^\/missions\/([^/]+)(?:\/workstreams)?$/);
       const receiptMatch = req.path.match(/^\/receipts\/([^/]+)$/);
       const packMatch = req.path.match(/^\/context-packs\/([^/]+)$/);
-      const contractMatch = req.path.match(/^\/contracts\/([^/]+)(?:\/history)?$/);
+      const settingsMatch = req.path.match(/^\/employee-settings\/([^/]+)$/);
       if (missionMatch) scope = (await svc.getMission(company(req), id.parse(missionMatch[1]))).data;
       else if (receiptMatch) {
         const receipt = await svc.getReceipt(company(req), id.parse(receiptMatch[1]));
@@ -34,18 +35,23 @@ export function companyOsRoutes(db: Db) {
       } else if (packMatch) {
         const pack = await svc.getPack(company(req), id.parse(packMatch[1]));
         scope = { ownerAgentId: pack.agentId, assignedAgentId: pack.agentId };
-      } else if (contractMatch) scope = { ownerAgentId: id.parse(contractMatch[1]), assignedAgentId: id.parse(contractMatch[1]) };
+      } else if (settingsMatch) scope = { ownerAgentId: id.parse(settingsMatch[1]), assignedAgentId: id.parse(settingsMatch[1]) };
       else if (req.path === "/events" && req.query.missionId) scope = (await svc.getMission(company(req), id.parse(req.query.missionId))).data;
       await assertOrganizationPermission(db, company(req), getActorInfo(req), action, scope);
     }
     next();
   });
-  router.get("/contracts/:id", async (req, res) => { res.json(await svc.currentContract(company(req), resourceId(req))); });
-  router.get("/contracts/:id/history", async (req, res) => { res.json(await svc.contractHistory(company(req), resourceId(req))); });
-  router.put("/contracts/:id", async (req, res) => {
+  router.get("/operations-timeline", async (req, res) => {
     assertBoard(req);
-    const input = saveEmployeeContractSchema.parse(req.body);
-    res.json(await svc.saveContract(company(req), resourceId(req), input.contract, input.expectedVersion, getActorInfo(req)));
+    await assertOrganizationPermission(db, company(req), getActorInfo(req), "event.read");
+    await assertOrganizationPermission(db, company(req), getActorInfo(req), "context.read");
+    res.json(await readOperationsTimeline(db, company(req), operationsTimelineQuerySchema.parse(req.query)));
+  });
+  router.get("/employee-settings/:id", async (req, res) => { res.json(await svc.employeeSettings(company(req), resourceId(req))); });
+  router.put("/employee-settings/:id", async (req, res) => {
+    assertBoard(req);
+    const input = saveEmployeeOrganizationConfigSchema.parse(req.body);
+    res.json(await svc.saveEmployeeSettings(company(req), resourceId(req), input.config, input.expectedVersion, getActorInfo(req)));
   });
   router.get("/missions", async (req, res) => { res.json(await svc.listMissions(company(req))); });
   router.get("/missions/:id", async (req, res) => { res.json(await svc.getMission(company(req), resourceId(req))); });

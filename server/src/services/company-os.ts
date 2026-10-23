@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { agents, companies, goals, projects, executionWorkspaces, employeeContracts, missions, missionWorkstreams,
+import { agents, companies, goals, projects, executionWorkspaces, employeeOrganizationSettings, missions, missionWorkstreams,
   organizationReceipts, contextEvents, knowledgeEntities, knowledgeRelationships, organizationDeliveries,
   organizationContextPacks, organizationContextCursors, heartbeatRuns, type Db } from "@paperclipai/db";
-import type { EmployeeContract, MissionInput, WorkstreamInput, ReceiptInput, ContextEventInput, KnowledgeEntityInput, KnowledgeRelationshipInput, OwnershipBoundary } from "@paperclipai/shared";
+import type { EmployeeOrganizationConfig, MissionInput, WorkstreamInput, ReceiptInput, ContextEventInput, KnowledgeEntityInput, KnowledgeRelationshipInput, OwnershipBoundary } from "@paperclipai/shared";
 import { reservedOrganizationEventKind } from "@paperclipai/shared";
 import { assertOrganizationPermission } from "./organization-policy.js";
 import { badRequest, conflict, forbidden, notFound } from "../errors.js";
@@ -61,8 +61,8 @@ export function companyOsService(db: Db) {
     publications.forEach(publishActivity);
     return result;
   }
-  async function currentContract(reader: Reader, companyId: string, agentId: string) {
-    const [row] = await reader.select().from(employeeContracts).where(and(eq(employeeContracts.companyId, companyId), eq(employeeContracts.agentId, agentId))).orderBy(desc(employeeContracts.version)).limit(1);
+  async function employeeSettings(reader: Reader, companyId: string, agentId: string) {
+    const [row] = await reader.select().from(employeeOrganizationSettings).where(and(eq(employeeOrganizationSettings.companyId, companyId), eq(employeeOrganizationSettings.agentId, agentId))).orderBy(desc(employeeOrganizationSettings.version)).limit(1);
     return row ?? null;
   }
   async function event(tx: Transaction, publications: ActivityPublication[], companyId: string, actor: OrganizationActor, data: ContextEventInput, direct?: { agentId: string; receiptId: string }, origin: "system" | "employee" | "board" | "integration" = "system") {
@@ -75,17 +75,17 @@ export function companyOsService(db: Db) {
     const [created] = await tx.insert(contextEvents).values({ ...data, companyId, origin, actorType: actor.actorType, actorId: actor.actorId, runId: actor.runId ?? null }).returning();
     await logActivity(tx as unknown as Db, { companyId, ...actor, agentId: actor.actorType === "agent" ? actor.actorId : null, action: data.kind, entityType: "context_event", entityId: created.id,
       details: { subject: data.subject, missionId: data.missionId, causationId: data.causationId } }, publications);
-    const contracts = await tx.select().from(employeeContracts).where(eq(employeeContracts.companyId, companyId)).orderBy(desc(employeeContracts.version));
+    const settingsRows = await tx.select().from(employeeOrganizationSettings).where(eq(employeeOrganizationSettings.companyId, companyId));
     const visited = new Set<string>();
     const mission = data.missionId ? await one(tx, missions, companyId, data.missionId) : null;
-    for (const contract of contracts) {
-      if (visited.has(contract.agentId)) continue;
-      visited.add(contract.agentId);
-      if (direct && contract.agentId !== direct.agentId) continue;
-      if (!direct && actor.actorType === "agent" && contract.agentId === actor.actorId) continue;
-      if (!direct && mission && ![mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(contract.agentId)) continue;
-      if (!(contract.contract.eventSubscriptions as string[]).includes(data.kind)) continue;
-      await tx.insert(organizationDeliveries).values({ companyId, eventId: created.id, agentId: contract.agentId,
+    for (const settings of settingsRows) {
+      if (visited.has(settings.agentId)) continue;
+      visited.add(settings.agentId);
+      if (direct && settings.agentId !== direct.agentId) continue;
+      if (!direct && actor.actorType === "agent" && settings.agentId === actor.actorId) continue;
+      if (!direct && mission && ![mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(settings.agentId)) continue;
+      if (!(settings.config.eventSubscriptions as string[]).includes(data.kind)) continue;
+      await tx.insert(organizationDeliveries).values({ companyId, eventId: created.id, agentId: settings.agentId,
         missionId: data.missionId, receiptId: direct?.receiptId ?? null, reason: data.kind }).onConflictDoNothing();
     }
     return created;
@@ -97,17 +97,19 @@ export function companyOsService(db: Db) {
     return mission;
   }
   const svc = {
-    currentContract: (companyId: string, agentId: string) => currentContract(db, companyId, agentId),
-    contractHistory: (companyId: string, agentId: string) => db.select().from(employeeContracts).where(and(eq(employeeContracts.companyId, companyId), eq(employeeContracts.agentId, agentId))).orderBy(desc(employeeContracts.version)).limit(100),
-    saveContract: (companyId: string, agentId: string, contract: EmployeeContract, expectedVersion: number, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
-      if (actor.actorType !== "user") throw forbidden("Board access required to change contracts");
+    employeeSettings: (companyId: string, agentId: string) => employeeSettings(db, companyId, agentId),
+    saveEmployeeSettings: (companyId: string, agentId: string, config: EmployeeOrganizationConfig, expectedVersion: number, actor: OrganizationActor) => mutate(companyId, actor, async (tx, pubs) => {
+      if (actor.actorType !== "user") throw forbidden("Board access required to change employee settings");
       await checkAgent(tx, companyId, agentId);
-      for (const exposure of contract.serviceExposures ?? []) if (exposure.orgRootAgentId) await checkAgent(tx, companyId, exposure.orgRootAgentId);
-      const current = await currentContract(tx, companyId, agentId);
-      if ((current?.version ?? 0) !== expectedVersion) throw conflict("Contract changed; reload before saving");
-      const [revision] = await tx.insert(employeeContracts).values({ companyId, agentId, version: expectedVersion + 1, contract, actorId: actor.actorId, runId: actor.runId ?? null }).returning();
-      await event(tx, pubs, companyId, actor, { ...eventData("contract.updated", "Employee contract updated", `Contract version ${revision.version}`), metadata: { agentId, contractVersion: revision.version } });
-      return revision;
+      for (const exposure of config.serviceExposures) if (exposure.orgRootAgentId) await checkAgent(tx, companyId, exposure.orgRootAgentId);
+      const current = await employeeSettings(tx, companyId, agentId);
+      if ((current?.version ?? 0) !== expectedVersion) throw conflict("Employee settings changed; reload before saving");
+      const values = { config, version: expectedVersion + 1, updatedAt: new Date() };
+      const [saved] = current
+        ? await tx.update(employeeOrganizationSettings).set(values).where(and(eq(employeeOrganizationSettings.companyId, companyId), eq(employeeOrganizationSettings.agentId, agentId))).returning()
+        : await tx.insert(employeeOrganizationSettings).values({ companyId, agentId, ...values }).returning();
+      await event(tx, pubs, companyId, actor, { ...eventData("employee.settings_updated", "Employee services and permissions updated", `Settings version ${saved.version}`), metadata: { agentId, settingsVersion: saved.version } });
+      return saved;
     }),
     listMissions: (companyId: string) => db.select().from(missions).where(eq(missions.companyId, companyId)).orderBy(desc(missions.updatedAt)).limit(200),
     getMission: (companyId: string, id: string) => one(db, missions, companyId, id),
@@ -187,18 +189,15 @@ export function companyOsService(db: Db) {
       }
       let recipientAgentId = input.recipientAgentId;
       if (!recipientAgentId) {
-        const contracts = await tx.select().from(employeeContracts).where(eq(employeeContracts.companyId, companyId)).orderBy(desc(employeeContracts.version));
-        const seen = new Set<string>();
-        const advertised = contracts.filter(c => {
-          if (seen.has(c.agentId)) return false;
-          seen.add(c.agentId);
-          return [...c.contract.capabilities, ...c.contract.servicesProvided, ...(c.contract.serviceExposures ?? []).map(e => e.capability)].includes(input.capability!);
+        const settingsRows = await tx.select().from(employeeOrganizationSettings).where(eq(employeeOrganizationSettings.companyId, companyId));
+        const advertised = settingsRows.filter(c => {
+          return [...c.config.capabilities, ...c.config.servicesProvided, ...(c.config.serviceExposures ?? []).map(e => e.capability)].includes(input.capability!);
         });
         const matches = [];
         const employees = await tx.select({ id: agents.id, reportsTo: agents.reportsTo }).from(agents).where(eq(agents.companyId, companyId));
         for (const provider of advertised) {
           const inMission = [mission.data.ownerAgentId, ...mission.data.participantAgentIds].includes(provider.agentId);
-          const exposures = (provider.contract.serviceExposures ?? []).filter(e => e.capability === input.capability);
+          const exposures = (provider.config.serviceExposures ?? []).filter(e => e.capability === input.capability);
           const exposed = exposures.some(exposure => {
             if (exposure.scope === "company") return true;
             if (exposure.scope === "mission") return inMission;

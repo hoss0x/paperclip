@@ -1,5 +1,5 @@
 import { and, desc, eq } from "drizzle-orm";
-import { agents, companies, employeeContracts, type Db } from "@paperclipai/db";
+import { agents, companies, employeeOrganizationSettings, type Db } from "@paperclipai/db";
 import { organizationPolicySchema, type OrganizationPolicy } from "@paperclipai/shared";
 import { forbidden, notFound } from "../errors.js";
 
@@ -25,9 +25,9 @@ export async function assertOrganizationPermission(reader: Reader, companyId: st
   if (!employee) throw forbidden("Employee is not in this company");
   const [company] = await reader.select({ policy: companies.organizationPolicy }).from(companies).where(eq(companies.id, companyId));
   if (!company) throw notFound("Company not found");
-  const [contract] = await reader.select().from(employeeContracts).where(and(eq(employeeContracts.companyId, companyId), eq(employeeContracts.agentId, actor.actorId))).orderBy(desc(employeeContracts.version)).limit(1);
-  for (const raw of [company.policy, contract?.contract.policy ?? { defaultMode: "allowed", permissions: {} }]) {
+  const [settings] = await reader.select().from(employeeOrganizationSettings).where(and(eq(employeeOrganizationSettings.companyId, companyId), eq(employeeOrganizationSettings.agentId, actor.actorId))).orderBy(desc(employeeOrganizationSettings.version)).limit(1);
+  for (const raw of [company.policy, settings?.config.policy ?? { defaultMode: "allowed", permissions: {} }]) {
     const parsed = organizationPolicySchema.safeParse(raw);
-    if (!parsed.success || !evaluateOrganizationPolicy(parsed.data, action, actor.actorId, scope)) throw forbidden(`Contract/company policy restricts ${action}; board review is required for approval_required actions`);
+    if (!parsed.success || !evaluateOrganizationPolicy(parsed.data, action, actor.actorId, scope)) throw forbidden(`Employee/company policy restricts ${action}; board review is required for approval_required actions`);
   }
 }

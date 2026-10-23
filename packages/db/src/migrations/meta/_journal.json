@@ -2101,6 +2101,13 @@
       "when": 1792420620219,
       "tag": "0301_gorgeous_longshot",
       "breakpoints": true
+    },
+    {
+      "idx": 302,
+      "version": "7",
+      "when": 1792717260879,
+      "tag": "0302_employee_charter_cleanup",
+      "breakpoints": true
     }
   ]
 }

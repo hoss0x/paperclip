@@ -1397,10 +1397,10 @@ export function AgentDetail() {
         />
       )}
 
-      {activeView === "contract" && resolvedCompanyId && <OrganizationPanel section="Contracts" companyId={resolvedCompanyId} agentId={agent.id} />}
+      {activeView === "automation" && resolvedCompanyId && <OrganizationPanel section="Services & Automation" companyId={resolvedCompanyId} agentId={agent.id} />}
 
       {activeView === "instructions" && (
-        <div><PromptsTab
+        <div><p className="text-sm text-muted-foreground">AGENTS.md defines this employee’s purpose, responsibilities, expected outcomes, decision rights and boundaries. Services, wake subscriptions and periodic reviews are under Services &amp; Automation; enforced actions are under Permissions. Saved changes affect the next Run. Each Run retains its governing file hash and snapshot.</p><PromptsTab
           agent={agent}
           companyId={resolvedCompanyId ?? undefined}
           showSaveNotice={false}
@@ -1461,6 +1461,7 @@ export function AgentDetail() {
         <AgentChannelsPanel agentId={agent.id} companyId={resolvedCompanyId} />
       )}
 
+      {activeView === "permissions" && resolvedCompanyId && <OrganizationPanel section="Permissions" companyId={resolvedCompanyId} agentId={agent.id} />}
       {activeView === "permissions" && (
         <div>
           <ConfigurationTab

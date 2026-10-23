@@ -19,7 +19,7 @@ export async function ingestOrganizationEvidence(db: Db) {
       const related = projectId ? await tx.select().from(missions).where(and(eq(missions.companyId, activity.companyId), sql`${missions.data}->'projectIds' @> ${JSON.stringify([projectId])}::jsonb`)).orderBy(asc(missions.id)).limit(100) : [];
       const record = { companyId: activity.companyId, kind: "paperclip.evidence_recorded", origin: "system", actorType: "system", actorId: "paperclip-evidence", runId: activity.runId,
         subject: `Paperclip evidence: ${activity.action}`, summary: `${activity.entityType} ${activity.entityId}: ${activity.action}`, projectId,
-        metadata: { source: "activity", activityId: activity.id, action: activity.action, entityType: activity.entityType, entityId: activity.entityId, originalActorType: activity.actorType, originalActorId: activity.actorId, observedAt: activity.createdAt.toISOString() } };
+        metadata: { source: "activity", activityId: activity.id, action: activity.action, entityType: activity.entityType, entityId: activity.entityId, originalActorType: activity.actorType, originalActorId: activity.actorId, workProductId: typeof activity.details?.workProductId === "string" ? activity.details.workProductId : null, observedAt: activity.createdAt.toISOString() } };
       await tx.insert(contextEvents).values({ ...record, sourceId: `activity:${activity.id}` }).onConflictDoNothing();
       for (const mission of related) await tx.insert(contextEvents).values({ ...record, missionId: mission.id, sourceId: `activity:${activity.id}:mission:${mission.id}` }).onConflictDoNothing();
     });

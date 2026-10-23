@@ -44,9 +44,9 @@ import { storybookIssues } from "../../fixtures/paperclipData";
 import "./settings.css";
 
 const descriptions: Record<AgentLocalDetailView, string> = {
-  contract: "Contract & services",
+  automation: "Services & Automation",
   overview: "A snapshot of Nova’s work, capabilities, and current setup.",
-  instructions: "The files that guide how your agent thinks and works.",
+  instructions: "The employee role charter and its history in AGENTS.md.",
   skills: "Choose the skills your agent brings to each task.",
   runtime:
     "Configure the harness, model, environment, and how your agent runs.",

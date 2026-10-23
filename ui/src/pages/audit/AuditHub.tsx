@@ -1,4 +1,4 @@
-import { OrganizationPanel } from "../OrganizationPanels";
+import { OperationsTimeline } from "./OperationsTimeline";
 import { useCallback, useEffect } from "react";
 import { History } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
@@ -8,7 +8,6 @@ import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { Costs } from "@/pages/Costs";
-import { Timeline } from "@/pages/Timeline";
 import { AuditFeed, type AuditFeedMode } from "./AuditFeed";
 import { AuditRuns } from "./AuditRuns";
 import { RoutineAuditActivity } from "./RoutineAuditActivity";
@@ -125,7 +124,7 @@ export function AuditHub({ section }: { section: AuditSection }) {
       ) : section === "budgets" ? (
         <Costs embedded initialTab="budgets" lockTab />
       ) : section === "timeline" ? (
-        <><Timeline embedded /><OrganizationPanel section="Timeline" companyId={selectedCompanyId} /></>
+        <OperationsTimeline key={selectedCompanyId} companyId={selectedCompanyId} />
       ) : (
         <Costs embedded initialTab="overview" hideBudgetsTab />
       )}

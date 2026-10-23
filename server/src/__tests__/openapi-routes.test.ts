@@ -716,7 +716,7 @@ describe("openapi routes", () => {
   it("documents Company OS contract authority and versioned mutations", () => {
     const { spec } = loadSpecRoutes();
     const prefix = "/api/companies/{companyId}/organization";
-    const contract = spec.paths[`${prefix}/contracts/{id}`].put;
+    const contract = spec.paths[`${prefix}/employee-settings/{id}`].put;
     expect(contract["x-paperclip-authorization"]).toEqual({ actor: "board" });
     expect(contract.requestBody.content["application/json"].schema.required).toContain("expectedVersion");
     const mission = spec.paths[`${prefix}/missions/{id}`].put;

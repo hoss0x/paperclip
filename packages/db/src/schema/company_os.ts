@@ -1,17 +1,17 @@
 import { sql } from "drizzle-orm";
 import { bigserial, bigint, pgTable, uuid, text, integer, timestamp, jsonb, index, uniqueIndex, unique, foreignKey } from "drizzle-orm/pg-core";
-import type { EmployeeContract, MissionInput, WorkstreamInput, KnowledgeEntityInput } from "@paperclipai/shared";
+import type { EmployeeOrganizationConfig, MissionInput, WorkstreamInput, KnowledgeEntityInput } from "@paperclipai/shared";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
 
 const companyId = () => uuid("company_id").notNull().references(() => companies.id, { onDelete: "cascade" });
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
 const updatedAt = () => timestamp("updated_at", { withTimezone: true }).notNull().defaultNow();
-export const employeeContracts = pgTable("employee_contracts", {
-  id: uuid("id").primaryKey().defaultRandom(), companyId: companyId(), agentId: uuid("agent_id").notNull(),
-  version: integer("version").notNull(), contract: jsonb("contract").$type<EmployeeContract>().notNull(),
-  actorId: text("actor_id").notNull(), runId: uuid("run_id"), createdAt: createdAt(),
-}, t => [uniqueIndex("employee_contract_version_uq").on(t.companyId, t.agentId, t.version),
+export const employeeOrganizationSettings = pgTable("employee_organization_settings", {
+  companyId: companyId(), agentId: uuid("agent_id").notNull(),
+  version: integer("version").notNull(), config: jsonb("config").$type<EmployeeOrganizationConfig>().notNull(),
+  createdAt: createdAt(), updatedAt: updatedAt(),
+}, t => [uniqueIndex("employee_organization_settings_owner_uq").on(t.companyId, t.agentId),
   foreignKey({ columns: [t.companyId, t.agentId], foreignColumns: [agents.companyId, agents.id] }).onDelete("cascade")]);
 export const missions = pgTable("missions", {
   id: uuid("id").primaryKey().defaultRandom(), companyId: companyId(), data: jsonb("data").$type<MissionInput>().notNull(),
@@ -73,7 +73,7 @@ export const organizationDeliveries = pgTable("organization_deliveries", {
   foreignKey({ columns: [t.companyId, t.eventId], foreignColumns: [contextEvents.companyId, contextEvents.id] }).onDelete("cascade")]);
 export const organizationContextPacks = pgTable("organization_context_packs", {
   id: uuid("id").primaryKey().defaultRandom(), companyId: companyId(), agentId: uuid("agent_id").notNull(), runId: uuid("run_id").notNull(),
-  missionId: uuid("mission_id"), contractVersion: integer("contract_version"), pack: jsonb("pack").$type<Record<string, unknown>>().notNull(),
+  missionId: uuid("mission_id"), pack: jsonb("pack").$type<Record<string, unknown>>().notNull(),
   eventIds: jsonb("event_ids").$type<string[]>().notNull(), settledAt: timestamp("settled_at", { withTimezone: true }), createdAt: createdAt(),
 }, t => [uniqueIndex("organization_pack_run_uq").on(t.companyId, t.runId), index("organization_pack_settlement_idx").on(t.settledAt), index("organization_pack_agent_mission_idx").on(t.companyId, t.agentId, t.missionId),
   foreignKey({ name: "organization_pack_employee_fk", columns: [t.companyId, t.agentId], foreignColumns: [agents.companyId, agents.id] })]);

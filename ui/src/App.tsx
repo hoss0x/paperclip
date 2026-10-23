@@ -25,7 +25,7 @@ import { CloudAccessGate } from "./components/CloudAccessGate";
 import { PaperclipLoading } from "./components/AnimatedPaperclipIcon";
 import { Dashboard } from "./pages/Dashboard";
 import { DashboardLive } from "./pages/DashboardLive";
-import { Timeline } from "./pages/Timeline";
+import { OperationsTimelinePage } from "./pages/audit/OperationsTimeline";
 import { Companies } from "./pages/Companies";
 import { AGENT_FILTER_TABS, Agents } from "./pages/Agents";
 import { AgentDetail } from "./pages/AgentDetail";
@@ -157,7 +157,7 @@ function boardRoutes(streamlinedUiEnabled: boolean, combinedInboxTasksEnabled: b
       <Route path="dashboard/live" element={<DashboardLive />} />
       <Route
         path="timeline"
-        element={streamlinedUiEnabled ? <AuditCompatibilityRedirect to="/activity/timeline" /> : <Timeline />}
+        element={streamlinedUiEnabled ? <AuditCompatibilityRedirect to="/activity/timeline" /> : <OperationsTimelinePage />}
       />
       <Route path="onboarding" element={<OnboardingRoutePage />} />
       <Route path="companies" element={<Companies />} />

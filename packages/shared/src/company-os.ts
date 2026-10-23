@@ -6,7 +6,7 @@ const text = z.string().max(20000);
 const lines = z.array(z.string().trim().min(1).max(2000)).max(100);
 const ids = z.array(id).max(100).refine(v => new Set(v).size === v.length, "Duplicate IDs");
 const metadata = z.record(z.string().max(100), z.unknown()).refine(v => JSON.stringify(v).length <= 20000, "Metadata too large");
-export const organizationEventKinds = ["mission.started", "mission.updated", "mission.completed", "mission.stalled", "receipt.received", "receipt.response_received", "decision.requested", "employee.escalation", "context.created", "goal.at_risk", "review.requested", "review.scheduled", "workstream.updated", "knowledge.updated", "run.completed", "contract.updated"] as const;
+export const organizationEventKinds = ["mission.started", "mission.updated", "mission.completed", "mission.stalled", "receipt.received", "receipt.response_received", "decision.requested", "employee.escalation", "context.created", "goal.at_risk", "review.requested", "review.scheduled", "workstream.updated", "knowledge.updated", "run.completed", "employee.settings_updated"] as const;
 // Restrictions intersect company authorization; these are never privilege grants.
 export const organizationPolicyModes = ["allowed", "denied", "assigned_only", "owned_only", "participant_only", "approval_required"] as const;
 export const organizationActions = ["mission.read", "mission.create", "mission.update", "mission.complete", "workstream.create", "workstream.update", "receipt.read", "receipt.send", "receipt.request_decision", "receipt.acknowledge", "knowledge.read", "knowledge.write", "event.read", "event.emit", "context.read"] as const;
@@ -20,19 +20,16 @@ export const serviceExposureSchema = z.object({
   orgRootAgentId: id.optional(),
 }).strict();
 export const reservedOrganizationEventKind = (kind: string) => /^(mission|workstream|receipt|run|contract|knowledge|review|decision|employee|paperclip)\./.test(kind);
-export const employeeContractSchema = z.object({
+/** Machine settings only. Employee role semantics belong to AGENTS.md. */
+export const employeeOrganizationConfigSchema = z.object({
   policy: organizationPolicySchema.default({ defaultMode: "allowed", permissions: {} }),
   serviceExposures: z.array(serviceExposureSchema).max(100).default([]),
-  purpose: text.default(""), mission: text.default(""), responsibilities: lines.default([]),
-  expectedOutcomes: lines.default([]), authority: lines.default([]), prohibitedActions: lines.default([]),
   capabilities: lines.default([]), servicesProvided: lines.default([]), servicesConsumed: lines.default([]),
   eventSubscriptions: z.array(short).max(100).default([]),
-  escalationRules: lines.default([]), collaborationRules: lines.default([]), operatingPolicies: lines.default([]),
-  runtimeInstructions: text.default(""), reportingExpectations: text.default(""),
   scheduledReviewMinutes: z.number().int().min(15).max(525600).nullable().default(null),
-}).strict().refine(v => JSON.stringify(v).length <= 24000, "Contract must fit within 24,000 characters");
-export type EmployeeContract = z.infer<typeof employeeContractSchema>;
-export const saveEmployeeContractSchema = z.object({ expectedVersion: z.number().int().min(0), contract: employeeContractSchema }).strict();
+}).strict();
+export type EmployeeOrganizationConfig = z.infer<typeof employeeOrganizationConfigSchema>;
+export const saveEmployeeOrganizationConfigSchema = z.object({ expectedVersion: z.number().int().min(0), config: employeeOrganizationConfigSchema }).strict();
 export const missionSchema = z.object({
   title: short, objective: text, ownerAgentId: id.nullable(), participantAgentIds: ids,
   goalIds: ids, projectIds: ids, status: z.enum(["planned", "active", "paused", "stalled", "completed", "cancelled"]),
@@ -76,8 +73,28 @@ export type KnowledgeRelationshipInput = z.infer<typeof knowledgeRelationshipSch
 export interface OrganizationRecord<T> { id: string; companyId: string; data: T; createdAt: string; updatedAt: string }
 export type Mission = OrganizationRecord<MissionInput>;
 export type Workstream = OrganizationRecord<WorkstreamInput> & { missionId: string };
-export interface ContractRevision { id: string; companyId: string; agentId: string; version: number; contract: EmployeeContract; createdAt: string; actorId: string; runId: string | null }
+export interface EmployeeOrganizationSettings { companyId: string; agentId: string; version: number; config: EmployeeOrganizationConfig; createdAt: string; updatedAt: string }
 export interface Receipt extends ReceiptInput { id: string; companyId: string; recipientAgentId: string; correlationId: string; status: string; acknowledgedAt: string | null; resolvedAt: string | null; createdAt: string }
 export interface ContextEvent extends ContextEventInput { origin?: "system" | "employee" | "board" | "integration"; sourceId?: string | null; id: string; companyId: string; actorType: string; actorId: string; runId: string | null; createdAt: string }
 export type KnowledgeEntity = OrganizationRecord<KnowledgeEntityInput>;
 export interface KnowledgeRelationship extends KnowledgeRelationshipInput { id: string; companyId: string; validFrom: string; validTo: string | null }
+
+export const operationsTimelineCategories = ["Runs", "Missions", "Workstreams", "Receipts", "Knowledge", "Decisions / Escalations", "Issues / Tasks", "System / Evidence"] as const;
+export const operationsTimelineQuerySchema = z.object({
+  from: z.iso.datetime(), to: z.iso.datetime(), beforeAt: z.iso.datetime().optional(), beforeId: id.optional(),
+  agentId: id.optional(), projectId: id.optional(), missionId: id.optional(),
+  category: z.enum(operationsTimelineCategories).optional(), status: z.string().max(100).optional(), search: z.string().max(200).optional(),
+}).strict().refine(v => Date.parse(v.from) <= Date.parse(v.to), "Start must be before end")
+  .refine(v => Boolean(v.beforeAt) === Boolean(v.beforeId), "Both cursor fields are required");
+export type OperationsTimelineQuery = z.infer<typeof operationsTimelineQuerySchema>;
+export interface OperationsTimelineEntry {
+  id: string; source: "run" | "event"; at: string; title: string; category: string;
+  agentId: string | null; agentName: string; missionId: string | null; missionName: string | null;
+  projectId: string | null; runId: string | null; status: string | null; summary: string;
+  usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number; totalTokens: number } | null;
+  details: Record<string, unknown>;
+}
+export interface OperationsTimelinePage {
+  entries: OperationsTimelineEntry[];
+  next: { beforeAt: string; beforeId: string } | null;
+}

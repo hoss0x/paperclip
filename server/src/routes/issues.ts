@@ -10805,7 +10805,7 @@ export function issueRoutes(
         agentId: actor.agentId,
         runId: actor.runId,
         agentApiKeyId: actor.agentApiKeyId,
-        action: "issue.work_product_created",
+        action: existingRunAttachmentProduct ? "issue.work_product_updated" : "issue.work_product_created",
         entityType: "issue",
         entityId: issue.id,
         details: {
