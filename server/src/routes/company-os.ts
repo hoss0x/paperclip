@@ -83,7 +83,18 @@ export function companyOsRoutes(db: Db) {
   });
   router.get("/relationships", async (req, res) => { res.json(await svc.listRelationships(company(req), req.query.history === "true")); });
   router.post("/relationships", async (req, res) => { res.status(201).json(await svc.addRelationship(company(req), knowledgeRelationshipSchema.parse(req.body), getActorInfo(req))); });
-  router.get("/context-packs/:id", async (req, res) => { res.json(await svc.getPack(company(req), resourceId(req))); });
+  router.get("/context-packs/:id", async (req, res) => {
+    const saved = await svc.getPack(company(req), resourceId(req));
+    const provenance = saved.pack.instructionProvenance;
+    if (req.actor.type === "agent" && provenance && typeof provenance === "object") {
+      // context.read does not grant instruction-file read authority. Keep the
+      // governing reference inspectable; bytes use the native instruction API.
+      const { contentBase64: _restricted, ...reference } = provenance as Record<string, unknown>;
+      res.json({ ...saved, pack: { ...saved.pack, instructionProvenance: reference } });
+      return;
+    }
+    res.json(saved);
+  });
   root.use("/companies/:companyId/organization", router);
   return root;
 }

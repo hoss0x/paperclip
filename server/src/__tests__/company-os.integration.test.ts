@@ -218,6 +218,14 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     const provenance = { source: "instruction_file", contentHash: "fixture-hash", revisionId: "fixture-revision", contentBase64: Buffer.from(content).toString("base64") };
     const pack = await compileOrganizationContext(db, r, r.contextSnapshot!, provenance);
     expect(pack!.pack.instructionProvenance).toEqual(provenance);
+    const apiPath = `/api/companies/${c}/organization/context-packs/${r.id}`;
+    const boardView = await request(app(c)).get(apiPath);
+    expect(boardView.body.pack.instructionProvenance.contentBase64).toBe(provenance.contentBase64);
+    const agentView = await request(app(c,b)).get(apiPath);
+    expect(agentView.status).toBe(200);
+    expect(agentView.body.pack.instructionProvenance.contentHash).toBe(provenance.contentHash);
+    expect(agentView.body.pack.instructionProvenance).not.toHaveProperty("contentBase64");
+
     expect(pack!.pack).not.toHaveProperty("contract");
     const rendered = renderOrganizationContext(pack!, false);
     expect(rendered).not.toContain(provenance.contentBase64);
