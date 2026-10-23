@@ -430,4 +430,13 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     expect(pack!.eventIds).toContain(event.id);
   });
 
+  it("preserves the existing settings-change subscription key after removing Contract storage", async () => {
+    const saved = await svc.saveEmployeeSettings(c,b,config(["contract.updated"]),0,board);
+    await svc.saveEmployeeSettings(c,b,{...saved.config,capabilities:["research","review"]},1,board);
+    const changes = (await svc.listEvents(c)).filter(e => e.kind === "contract.updated");
+    expect(changes).toHaveLength(2);
+    expect(changes[0].metadata).toMatchObject({agentId:b,settingsVersion:2});
+    expect(await db.select().from(organizationDeliveries).where(and(eq(organizationDeliveries.companyId,c),eq(organizationDeliveries.reason,"contract.updated")))).toHaveLength(2);
+  });
+
 });

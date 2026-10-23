@@ -6,7 +6,7 @@ const text = z.string().max(20000);
 const lines = z.array(z.string().trim().min(1).max(2000)).max(100);
 const ids = z.array(id).max(100).refine(v => new Set(v).size === v.length, "Duplicate IDs");
 const metadata = z.record(z.string().max(100), z.unknown()).refine(v => JSON.stringify(v).length <= 20000, "Metadata too large");
-export const organizationEventKinds = ["mission.started", "mission.updated", "mission.completed", "mission.stalled", "receipt.received", "receipt.response_received", "decision.requested", "employee.escalation", "context.created", "goal.at_risk", "review.requested", "review.scheduled", "workstream.updated", "knowledge.updated", "run.completed", "employee.settings_updated"] as const;
+export const organizationEventKinds = ["mission.started", "mission.updated", "mission.completed", "mission.stalled", "receipt.received", "receipt.response_received", "decision.requested", "employee.escalation", "context.created", "goal.at_risk", "review.requested", "review.scheduled", "workstream.updated", "knowledge.updated", "run.completed", "contract.updated"] as const;
 // Restrictions intersect company authorization; these are never privilege grants.
 export const organizationPolicyModes = ["allowed", "denied", "assigned_only", "owned_only", "participant_only", "approval_required"] as const;
 export const organizationActions = ["mission.read", "mission.create", "mission.update", "mission.complete", "workstream.create", "workstream.update", "receipt.read", "receipt.send", "receipt.request_decision", "receipt.acknowledge", "knowledge.read", "knowledge.write", "event.read", "event.emit", "context.read"] as const;

@@ -108,7 +108,8 @@ export function companyOsService(db: Db) {
       const [saved] = current
         ? await tx.update(employeeOrganizationSettings).set(values).where(and(eq(employeeOrganizationSettings.companyId, companyId), eq(employeeOrganizationSettings.agentId, agentId))).returning()
         : await tx.insert(employeeOrganizationSettings).values({ companyId, agentId, ...values }).returning();
-      await event(tx, pubs, companyId, actor, { ...eventData("employee.settings_updated", "Employee services and permissions updated", `Settings version ${saved.version}`), metadata: { agentId, settingsVersion: saved.version } });
+      // Preserve the existing subscription key; it no longer denotes a second role object.
+      await event(tx, pubs, companyId, actor, { ...eventData("contract.updated", "Employee services and permissions updated", `Settings version ${saved.version}`), metadata: { agentId, settingsVersion: saved.version } });
       return saved;
     }),
     listMissions: (companyId: string) => db.select().from(missions).where(eq(missions.companyId, companyId)).orderBy(desc(missions.updatedAt)).limit(200),
