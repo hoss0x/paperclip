@@ -80,7 +80,7 @@ export async function compileOrganizationContext(db: Db, run: typeof heartbeatRu
 }
 
 export function renderOrganizationContext(pack: typeof organizationContextPacks.$inferSelect, issueBound: boolean) {
-  const { instructionProvenance: _auditOnly, ...runtimeContext } = pack.pack;
+  const { instructionProvenance: _auditOnly, contract: _legacyRole, ...runtimeContext } = pack.pack;
   const wakeEvent = runtimeContext.wakeEvent as Record<string, unknown> | null;
   const changes = runtimeContext.changes as Record<string, unknown>[] | undefined;
   if (wakeEvent?.id && changes?.some(e => e.id === wakeEvent.id)) {

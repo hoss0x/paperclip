@@ -231,6 +231,10 @@ describe("Company OS: isolated PostgreSQL domain/API/runtime", () => {
     expect(rendered).not.toContain(provenance.contentBase64);
     expect(rendered).not.toContain(content);
     expect(rendered).toContain("AGENTS.md defines your role through the normal instruction path");
+    const legacyPack = { ...pack!, pack: { ...pack!.pack, contract: { purpose: "Obsolete duplicate charter prose" } } };
+    expect(renderOrganizationContext(legacyPack,false)).not.toContain("Obsolete duplicate charter prose");
+    expect(legacyPack.pack.contract.purpose).toBe("Obsolete duplicate charter prose");
+
   });
   it("detects generic and nested path conflicts without sibling-prefix false positives", () => {
     expect(boundariesOverlap({ kind: "path", resource: "src/auth" }, { kind: "path", resource: "src/auth/api" })).toBe(true);
