@@ -3299,6 +3299,49 @@ export function toolAccessService(
     );
   }
 
+  function normalizeTrustedLoopbackMcpEndpoint(
+    value: string | URL,
+  ): string | null {
+    try {
+      const parsed = new URL(
+        typeof value === "string" ? value : value.toString(),
+      );
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        return null;
+      if (parsed.username || parsed.password) return null;
+
+      const hostname = parsed.hostname
+        .replace(/^\[|\]$/g, "")
+        .toLowerCase();
+
+      // Deliberately literal-only: an allowlisted hostname must never be able
+      // to change DNS and become a different private address.
+      if (hostname !== "127.0.0.1" && hostname !== "::1") return null;
+
+      parsed.hash = "";
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  function trustedLoopbackMcpEndpoints(): Set<string> {
+    return new Set(
+      (process.env.PAPERCLIP_TRUSTED_LOOPBACK_MCP_ENDPOINTS ?? "")
+        .split(/[,\s]+/)
+        .map((value) => normalizeTrustedLoopbackMcpEndpoint(value))
+        .filter((value): value is string => value !== null),
+    );
+  }
+
+  function isTrustedLoopbackMcpEndpoint(value: string | URL): boolean {
+    const normalized = normalizeTrustedLoopbackMcpEndpoint(value);
+    return (
+      normalized !== null &&
+      trustedLoopbackMcpEndpoints().has(normalized)
+    );
+  }
+
   async function assertRemoteHttpUrlAllowed(value: string): Promise<string> {
     const endpoint = parseRemoteHttpEndpoint(value, (message, code) =>
       badRequest(message, { code }),
@@ -3306,7 +3349,9 @@ export function toolAccessService(
     await assertPublicRemoteHttpEndpoint(
       endpoint,
       {
-        allowPrivateNetwork: allowPrivateRemoteEndpoints(),
+        allowPrivateNetwork:
+          allowPrivateRemoteEndpoints() ||
+          isTrustedLoopbackMcpEndpoint(endpoint),
         lookup: options.remoteHttpEndpointLookup,
       },
       (message, code) => badRequest(message, { code }),
@@ -3314,9 +3359,14 @@ export function toolAccessService(
     return endpoint.toString();
   }
 
-  function remoteHttpFetchOptions(): GuardedRemoteHttpFetchOptions {
+  function remoteHttpFetchOptions(
+    endpoint?: string | URL,
+  ): GuardedRemoteHttpFetchOptions {
     return {
-      allowPrivateNetwork: allowPrivateRemoteEndpoints(),
+      allowPrivateNetwork:
+        allowPrivateRemoteEndpoints() ||
+        (endpoint !== undefined &&
+          isTrustedLoopbackMcpEndpoint(endpoint)),
       lookup: options.remoteHttpEndpointLookup,
       error: (message, code) => badRequest(message, { code }),
     };
@@ -3331,7 +3381,11 @@ export function toolAccessService(
           ...init,
           redirect: "manual",
         })
-      : guardedRemoteHttpFetch(endpoint, init, remoteHttpFetchOptions());
+      : guardedRemoteHttpFetch(
+          endpoint,
+          init,
+          remoteHttpFetchOptions(endpoint),
+        );
   }
 
   /**

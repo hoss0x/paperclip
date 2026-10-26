@@ -3338,6 +3338,49 @@ export function createToolGatewayService(
     );
   }
 
+  function normalizeTrustedLoopbackMcpEndpoint(
+    value: string | URL,
+  ): string | null {
+    try {
+      const parsed = new URL(
+        typeof value === "string" ? value : value.toString(),
+      );
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+        return null;
+      if (parsed.username || parsed.password) return null;
+
+      const hostname = parsed.hostname
+        .replace(/^\[|\]$/g, "")
+        .toLowerCase();
+
+      // Deliberately literal-only: an allowlisted hostname must never be able
+      // to change DNS and become a different private address.
+      if (hostname !== "127.0.0.1" && hostname !== "::1") return null;
+
+      parsed.hash = "";
+      return parsed.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  function trustedLoopbackMcpEndpoints(): Set<string> {
+    return new Set(
+      (process.env.PAPERCLIP_TRUSTED_LOOPBACK_MCP_ENDPOINTS ?? "")
+        .split(/[,\s]+/)
+        .map((value) => normalizeTrustedLoopbackMcpEndpoint(value))
+        .filter((value): value is string => value !== null),
+    );
+  }
+
+  function isTrustedLoopbackMcpEndpoint(value: string | URL): boolean {
+    const normalized = normalizeTrustedLoopbackMcpEndpoint(value);
+    return (
+      normalized !== null &&
+      trustedLoopbackMcpEndpoints().has(normalized)
+    );
+  }
+
   /**
    * Guard options for every outbound call to an operator-supplied MCP endpoint.
    *
@@ -3346,9 +3389,14 @@ export function createToolGatewayService(
    * it directly. Splitting validation from dispatch is what created the
    * DNS-rebinding TOCTOU in PAP-17098.
    */
-  function remoteHttpFetchOptions(): GuardedRemoteHttpFetchOptions {
+  function remoteHttpFetchOptions(
+    endpoint?: string | URL,
+  ): GuardedRemoteHttpFetchOptions {
     return {
-      allowPrivateNetwork: allowPrivateRemoteEndpoints(),
+      allowPrivateNetwork:
+        allowPrivateRemoteEndpoints() ||
+        (endpoint !== undefined &&
+          isTrustedLoopbackMcpEndpoint(endpoint)),
       error: (message, code) => new ToolGatewayHttpError(422, message, code),
     };
   }
@@ -5034,7 +5082,7 @@ export function createToolGatewayService(
         tool: input.entry?.toolName ?? "", parameters: asRecord(input.parameters) ?? {},
         signal: AbortSignal.timeout(input.timeoutMs),
         request: async (url, init) => {
-          const response = await guardedRemoteHttpFetch(url, init, remoteHttpFetchOptions());
+          const response = await guardedRemoteHttpFetch(url, init, remoteHttpFetchOptions(url));
           const body = await readBoundedRemoteResponse(response);
           if (!response.ok) throw new ToolGatewayHttpError(502,
             `Cognee Cloud request failed (HTTP ${response.status}).`, "cognee_api_error");
@@ -5280,7 +5328,7 @@ export function createToolGatewayService(
           params: input.params,
         }),
       },
-      remoteHttpFetchOptions(),
+      remoteHttpFetchOptions(endpoint),
     );
     const body = await readBoundedRemoteResponse(response);
     if (!response.ok) {
@@ -5963,7 +6011,7 @@ export function createToolGatewayService(
         options.remoteHttpRequest
           ? options.remoteHttpRequest(target, init)
           : guardedRemoteHttpFetch(target, init, {
-              ...remoteHttpFetchOptions(),
+              ...remoteHttpFetchOptions(target),
               // This call site owns a caller-set budget that can exceed the
               // transport's default response deadline, so hand it down rather than
               // letting the tighter default cut a legitimately slow tool short.
